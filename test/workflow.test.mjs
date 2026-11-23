@@ -161,10 +161,11 @@ test('separate verified accounts retain their watchlists and recommendation rule
   assert.deepEqual((await series()).watchedSeasons, [2])
   assert.equal((await logSelection([{ tmdb: 'tv:52', watched: [1, 2, 3] }])).status, 400)
   assert.deepEqual((await series()).watchedSeasons, [2])
-  const complete = await logSelection([{ tmdb: 'tv:52', watched: [2, 1] }])
+  const complete = await logSelection([{ tmdb: 'tv:52', watched: [2, 1], rating: 'Sehr gut' }])
   assert.equal(complete.status, 200)
   const finished = (await complete.json()).titles.find(title => title.tmdb === 'tv:52')
   assert.equal(finished.status, 'seen')
+  assert.equal(finished.rating, 'Sehr gut')
   assert.equal((await post('list', { action: 'seen', id: finished.id, rating: 'Lieblingsserie' }, second)).status, 200)
   assert.deepEqual((await series()).watchedSeasons, [1, 2])
   assert.equal((await read(first)).titles.find(title => title.tmdb === 'movie:51').status, 'reserve')
@@ -196,5 +197,16 @@ test('separate verified accounts retain their watchlists and recommendation rule
   assert.deepEqual((await household(first)).recommendations, [])
   assert.deepEqual((await household(second)).recommendations, [])
   assert.equal((await read(second)).titles.some(title => title.title === 'Ein eigener Film'), true)
+
+  const logRated = (title, genre, rating) => post('list', { action: 'log', title, type: 'film', genre, rating }, third)
+  assert.equal((await logRated('Favorit im All', 'Sci-Fi', 'Lieblingsfilm')).status, 200)
+  assert.equal((await logRated('Flacher Western', 'Western', 'Schlecht')).status, 200)
+  for (const [title, genre] of [['Neuer Western', 'Western'], ['Neues Weltall', 'Sci-Fi']]) {
+    assert.equal((await post('list', { action: 'add', title, type: 'serie', genre }, third)).status, 200)
+  }
+  const openSeries = (await read(third)).titles.find(title => title.status === 'open' && title.type === 'serie')
+  const replenished = await post('list', { action: 'seen', id: openSeries.id }, third)
+  assert.equal(replenished.status, 200)
+  assert.deepEqual((await replenished.json()).promoted, ['Neues Weltall'])
 
 })

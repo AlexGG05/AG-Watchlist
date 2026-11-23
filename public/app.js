@@ -45,16 +45,12 @@ function card(entry, repeat = false, shared = false) {
   const article = make('article', 'card')
   const index = stillTitles.indexOf(entry.title)
   const art = make('div', index >= 0 ? `art still a${index}` : 'art')
-  const artwork = button('', () => descriptionDialog(entry, shared), 'art-link')
-  artwork.setAttribute('aria-label', `Beschreibung zu ${entry.title}`)
-  if (entry.poster) artwork.append(posterImage(entry, 'card-poster'))
-  else if (state.data.user && state.data.onlineSearch) watchArtwork(artwork, entry)
-  art.append(artwork)
-  const menu = button('⋯', () => titleDialog(entry, repeat), 'icon-button')
-  menu.setAttribute('aria-label', `Optionen für ${entry.title}`)
+  const openDetails = button('', () => titleDialog(entry, repeat, shared), 'card-open')
+  openDetails.setAttribute('aria-label', `Details zu ${entry.title}`)
+  if (entry.poster) art.append(posterImage(entry, 'card-poster'))
+  else if (state.data.user && state.data.onlineSearch) watchArtwork(art, entry)
   art.append(make('span', entry.pool === 'marvel' ? 'pill marvel' : 'pill',
     entry.pool === 'marvel' ? `MARVEL · ${entry.type === 'serie' ? 'SERIE' : 'FILM'}` : (entry.type === 'serie' ? 'SERIE' : 'FILM')))
-  if (!shared) art.append(menu)
   const details = make('div', 'card-body')
   details.append(make('h3', '', entry.title))
   if (entry.genres.length) {
@@ -75,7 +71,7 @@ function card(entry, repeat = false, shared = false) {
     const service = entry.verifiedProvider ? `${entry.verifiedProvider} · DE` : entry.provider ? `${entry.provider} · Anbieter prüfen (DE)` : 'Anbieter prüfen (DE)'
     details.append(make('p', 'meta', [entry.type === 'serie' ? entry.extent || 'Staffeln noch zu prüfen' : 'Spielfilm', service].join(' · ')))
   }
-  article.append(art, details)
+  article.append(art, details, openDetails)
   return article
 }
 function render() {
@@ -209,32 +205,19 @@ async function update(input) {
   toast(state.data.searchWarning || (state.data.promoted.length && input.action !== 'preferences'
     ? `Nachgerückt: ${state.data.promoted.join(', ')}` : 'Gespeichert.'))
 }
-function titleDialog(entry, repeat) {
-  if (!state.data.user) return auth()
-  const actions = []
-  const fields = []
-  if (repeat) {
-    actions.push(submit('Vorschlag schließen', () => update({ id: entry.id, action: 'rewatch' })))
-  } else if (entry.status === 'excluded') {
-    fields.push(badge('Nicht ansehbar'))
-  } else {
-    if (entry.type === 'serie' && entry.tmdb) actions.push(button('Staffeln bearbeiten', () => descriptionDialog(entry)))
-    const options = state.data.ratings.filter(rating => (rating !== 'Lieblingsserie' || entry.type === 'serie') &&
-      (rating !== 'Lieblingsfilm' || entry.type === 'film'))
-    const rating = field('Bewertung', 'rating', { values: [['', 'Ohne neue Bewertung'], ...options.map(value => [value, value])] })
-    rating.querySelector('select').value = entry.rating || ''
-    fields.push(rating)
-    actions.push(submit(entry.status === 'seen' ? 'Bewertung speichern' : 'Als gesehen speichern', () =>
-      update({ id: entry.id, action: 'seen', rating: textOf('rating') })))
-    if (!['seen','watching'].includes(entry.status)) actions.push(submit('Am schauen', () => update({ id: entry.id, action: 'watching' }), 'button'))
-    if (entry.pool === 'seasonal' && !entry.status) actions.push(submit('Auf die Merkliste', () => update({ id: entry.id, action: 'reserve' }), 'button'))
-    if (entry.status !== 'seen') actions.push(button('Nicht ansehbar …', () => dialog(entry.title,
-      [make('p', '', 'Diesen Titel dauerhaft ausschließen?')], [
-        submit('Dauerhaft ausschließen', () => update({ id: entry.id, action: 'excluded' })),
-        button('Zurück', () => titleDialog(entry, repeat)),
-      ])))
+function ratingFields(entry) {
+  const group = make('fieldset', 'rating-choices')
+  group.append(make('legend', '', 'Deine Bewertung'))
+  for (const rating of state.data.ratings) {
+    if ((rating === 'Lieblingsserie' && entry.type !== 'serie') ||
+        (rating === 'Lieblingsfilm' && entry.type !== 'film')) continue
+    const label = make('label', 'checkbox')
+    const input = make('input')
+    Object.assign(input, { type: 'radio', name: 'rating', value: rating, checked: entry.rating === rating })
+    label.append(input, badge(rating))
+    group.append(label)
   }
-  dialog(entry.title, fields, actions)
+  return group
 }
 function posterImage(entry, className) {
   const image = make('img', className)
@@ -310,30 +293,53 @@ function watchArtwork(artwork, entry) {
   observedArt.set(artwork, entry)
   artworkObserver?.observe(artwork)
 }
-async function descriptionDialog(entry, shared = false) {
+async function titleDialog(entry, repeat = false, shared = false) {
   const panel = descriptionPanel(entry)
-  dialog(entry.title, [panel], [])
-  if (!state.data.user || !state.data.onlineSearch) return
+  const progress = make('div')
+  const fields = [panel]
+  const actions = []
+  if (!shared) {
+    if (entry.status === 'excluded') {
+      fields.push(badge('Nicht ansehbar'))
+    } else {
+      fields.push(ratingFields(entry), progress)
+      actions.push(submit(entry.status === 'seen' ? 'Bewertung speichern' : 'Als gesehen speichern', () =>
+        update({ id: entry.id, action: 'seen', rating: textOf('rating') })))
+      if (!['seen','watching'].includes(entry.status)) actions.push(submit('Am schauen', () => update({ id: entry.id, action: 'watching' }), 'button'))
+      if (entry.pool === 'seasonal' && !entry.status) actions.push(submit('Auf die Merkliste', () => update({ id: entry.id, action: 'reserve' }), 'button'))
+      if (entry.status !== 'seen') actions.push(button('Nicht ansehbar …', () => dialog(entry.title,
+        [make('p', '', 'Diesen Titel dauerhaft ausschließen?')], [
+          submit('Dauerhaft ausschließen', () => update({ id: entry.id, action: 'excluded' })),
+          button('Zurück', () => titleDialog(entry, repeat)),
+        ])))
+    }
+    if (repeat) actions.push(submit('Vorschlag schließen', () => update({ id: entry.id, action: 'rewatch' }), 'button'))
+  }
+  dialog(entry.title, fields, actions)
+  function showSeasons(details) {
+    if (!progress.isConnected || details.type !== 'serie' || !details.seasons?.length) return
+    const selected = new Set(details.watchedSeasons)
+    progress.replaceChildren(seasonFields(details, selected), submit('Staffelstand speichern', () => {
+      const finished = entry.status === 'seen' || details.seasons.every(season => selected.has(season.number))
+      return update({ action: 'log-selection', items: [{
+        tmdb: details.tmdb, watched: [...selected], rating: finished ? textOf('rating') : '',
+      }] })
+    }, 'button compact'))
+  }
+  if (!state.data.onlineSearch) return
   const status = make('p', 'meta', 'Titeldaten werden geladen …')
   panel.after(status)
   try {
     const match = await resolveMedia(entry)
     if (!match) { status.remove(); return }
-    const { tmdb } = match
-    const details = await api(`media/details?id=${encodeURIComponent(tmdb)}`)
+    const details = await api(`media/details?id=${encodeURIComponent(match.tmdb)}`)
     if (!panel.isConnected || !$('modal').open) return
-    const fields = [descriptionPanel({ ...entry, ...details })]
-    const actions = []
-    if (!shared && details.type === 'serie' && details.seasons.length && details.status !== 'excluded') {
-      const selected = new Set(details.watchedSeasons)
-      fields.push(seasonFields(details, selected))
-      actions.push(submit('Staffelstand speichern', () => update({
-        action: 'log-selection', items: [{ tmdb, watched: [...selected] }],
-      })))
-    }
-    dialog(entry.title, fields, actions)
-  } catch (error) {
-    status.textContent = error.message
+    panel.replaceWith(descriptionPanel({ ...entry, ...details }))
+    status.remove()
+    showSeasons(details)
+  } catch {
+    status.remove()
+    showSeasons(entry)
   }
 }
 function titleSearch(log) {

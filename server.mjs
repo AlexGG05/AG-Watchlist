@@ -110,7 +110,7 @@ function genreWeights(list) {
     const title = catalog.get(id) || list.custom[id]
     for (const genre of list.media?.[id]?.genres || title?.genres || []) weights.set(genre, (weights.get(genre) || 0) + strength)
   }
-  for (const genre of list.interests || []) weights.set(genre, Math.max(0, weights.get(genre) || 0) + 8)
+  for (const genre of list.interests || []) weights.set(genre, (weights.get(genre) || 0) + 8)
   return weights
 }
 function searchInterests(list) {
@@ -121,7 +121,10 @@ function searchInterests(list) {
 function fill(list) {
   const { entries, custom } = list
   const weights = genreWeights(list)
-  const score = entry => entry.genres.reduce((total, genre) => total + (weights.get(genre) || 0), 0)
+  const score = entry => {
+    const tags = list.media?.[entry.id]?.genres || entry.genres
+    return tags.reduce((total, genre) => total + (weights.get(genre) || 0), 0) / Math.max(1, tags.length)
+  }
   const all = new Map([...catalog, ...Object.values(custom).map(entry => [entry.id, entry])])
   const active = Object.keys(entries).filter(id => entries[id].status === 'open' && !marvelOrder.includes(id))
   const hasFilm = active.some(id => all.get(id)?.type === 'film')
@@ -406,9 +409,13 @@ async function lookupTitles(list, query, page) {
     more: page < Math.min(result.total_pages, 500),
   }
 }
+function validRating(rating, type) {
+  return ratings.includes(rating) && (rating !== 'Lieblingsserie' || type === 'serie') &&
+    (rating !== 'Lieblingsfilm' || type === 'film')
+}
 function storeSelection(list, selected, remember) {
   list.media ||= {}
-  for (const { media, watched } of selected) {
+  for (const { media, watched, rating } of selected) {
     const id = mediaKey(list, media)
     const previous = Object.hasOwn(list.entries, id) ? list.entries[id] : null
     const existingTitle = catalog.get(id) || (Object.hasOwn(list.custom, id) && list.custom[id])
@@ -432,6 +439,8 @@ function storeSelection(list, selected, remember) {
       })
     }
     const status = remember ? 'reserve' : complete || previous?.status === 'seen' ? 'seen' : 'watching'
+    if (rating && (status !== 'seen' || !validRating(rating, media.type))) throw fail(400, 'Diese Bewertung passt nicht zum Titel oder Sehstatus.')
+    const updatedRating = rating || previous?.rating || ''
     list.media[id] = {
       tmdb: media.tmdb, poster: media.poster, description: media.description,
       seasons: media.seasons, verifiedProvider: media.verifiedProvider, year: media.year,
@@ -439,8 +448,8 @@ function storeSelection(list, selected, remember) {
       ...(published.length ? { extent: `${published.length} ${published.length === 1 ? 'Staffel' : 'Staffeln'}` } : {}),
     }
     list.entries[id] = {
-      ...previous, status, rating: previous?.rating || '',
-      ...(status === 'seen' ? { seenAt: previous?.seenAt || Date.now() } : {}),
+      ...previous, status, rating: updatedRating,
+      ...(status === 'seen' ? { seenAt: (previous?.rating === updatedRating && previous?.seenAt) || Date.now() } : {}),
       ...(!remember && media.type === 'serie' ? { watchedSeasons: [...new Set(requested)].sort((a, b) => a - b) } : {}),
     }
   }
@@ -518,8 +527,7 @@ function mutate(list, input) {
     }
     const known = catalog.get(key) || (Object.hasOwn(custom, key) ? custom[key] : null)
     const type = known?.type || input.type
-    if (action === 'log' && rating && (!ratings.includes(rating) ||
-        (rating === 'Lieblingsfilm' && type !== 'film') || (rating === 'Lieblingsserie' && type !== 'serie'))) {
+    if (action === 'log' && rating && !validRating(rating, type)) {
       throw fail(400, 'Diese Bewertung passt nicht zur Titelart.')
     }
     if (!known) {
@@ -555,9 +563,7 @@ function mutate(list, input) {
   if (!['watching','seen','excluded','reserve'].includes(action)) throw fail(400, 'Unbekannter Status.')
   if (!eligible(title, entries)) throw fail(409, 'Ein früherer Teil ist zuerst an der Reihe.')
   if (action === 'reserve' && (existing || title.pool !== 'seasonal')) throw fail(409, 'Dieser Titel kann hier nicht vorgemerkt werden.')
-  if (action === 'seen' && rating && (!ratings.includes(rating) ||
-    (rating === 'Lieblingsserie' && title.type !== 'serie') ||
-    (rating === 'Lieblingsfilm' && title.type !== 'film'))) throw fail(400, 'Diese Bewertung passt nicht zur Titelart.')
+  if (action === 'seen' && rating && !validRating(rating, title.type)) throw fail(400, 'Diese Bewertung passt nicht zur Titelart.')
   const updatedRating = action === 'seen' ? rating || existing?.rating || '' : ''
   const previousDate = existing?.rating === updatedRating ? existing?.seenAt : null
   entries[id] = {
@@ -706,7 +712,7 @@ Die Einladung ist sieben Tage gültig.` })
         if (new Set(items.map(entry => entry.tmdb)).size !== items.length) throw fail(400, 'Titel dürfen nur einmal ausgewählt werden.')
         throttle(`media-save:${user.id}`, 45)
         try {
-          selected = await Promise.all(items.map(async entry => ({ media: await mediaDetails(entry.tmdb), watched: entry.watched })))
+          selected = await Promise.all(items.map(async entry => ({ media: await mediaDetails(entry.tmdb), watched: entry.watched, rating: entry.rating })))
         } catch (error) {
           if (error.status) throw error
           throw fail(502, 'Die Titeldaten konnten gerade nicht geladen werden. Bitte versuche es erneut.')
