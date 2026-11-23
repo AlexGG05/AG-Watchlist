@@ -294,10 +294,12 @@ function mutate(list, input) {
   if (action === 'seen' && rating && (!ratings.includes(rating) ||
     (rating === 'Lieblingsserie' && title.type !== 'serie') ||
     (rating === 'Lieblingsfilm' && title.type !== 'film'))) throw fail(400, 'Diese Bewertung passt nicht zur Titelart.')
+  const updatedRating = action === 'seen' ? rating || existing?.rating || '' : ''
+  const previousDate = existing?.rating === updatedRating ? existing?.seenAt : null
   entries[id] = {
     status: action,
-    rating: action === 'seen' ? rating || existing?.rating || '' : '',
-    ...(action === 'seen' ? { seenAt: existing?.rating === rating && existing?.seenAt || Date.now() } : {}),
+    rating: updatedRating,
+    ...(action === 'seen' ? { seenAt: previousDate || Date.now() } : {}),
   }
   return fill(list)
 }

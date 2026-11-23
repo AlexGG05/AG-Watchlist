@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -15,9 +15,26 @@ test('separate verified accounts retain their watchlists and recommendation rule
   const port = socket.address().port
   await new Promise(resolve => socket.close(resolve))
   const origin = `http://127.0.0.1:${port}`
-  const server = spawn(process.execPath, ['server.mjs'], {
+  const fixture = join(dir, 'tmdb.mjs')
+  await writeFile(fixture, `
+    globalThis.fetch = async url => {
+      if (url.hostname !== 'api.themoviedb.org' || url.searchParams.get('api_key') !== 'local-fixture') {
+        throw new Error('Unexpected request')
+      }
+      if (url.pathname === '/3/discover/movie') return Response.json({ results: [
+        { id: 42, title: 'Ein neues TMDB-Rätsel', genre_ids: [9648], release_date: '2020-01-01' },
+      ] })
+      if (url.pathname === '/3/discover/tv') return Response.json({ results: [] })
+      if (url.pathname === '/3/movie/42') return Response.json({
+        title: 'Ein neues TMDB-Rätsel', genres: [{ name: 'Mystery' }],
+        'watch/providers': { results: { DE: { flatrate: [{ provider_id: 8, provider_name: 'Netflix' }] } } },
+      })
+      throw new Error('Unknown TMDB endpoint')
+    }
+  `)
+  const server = spawn(process.execPath, ['--import', fixture, 'server.mjs'], {
     env: { ...process.env, NODE_ENV: 'test', PORT: port, DATA_DIR: dir, APP_URL: origin,
-      SMTP_URL: '', TMDB_API_KEY: '', TMDB_READ_TOKEN: '' },
+      SMTP_URL: '', TMDB_API_KEY: 'local-fixture', TMDB_READ_TOKEN: '' },
   })
   t.after(async () => {
     if (server.exitCode === null) {
@@ -89,5 +106,8 @@ test('separate verified accounts retain their watchlists and recommendation rule
   assert.deepEqual(personalized.interests, ['Mystery', 'Sci-Fi'])
   assert.equal(personalized.titles.find(title => title.id === 'ein-eigener-film').rating, 'Gut')
   assert.equal(personalized.titles.filter(title => title.status === 'open').length, 15)
+  const discovery = personalized.titles.find(title => title.tmdb === 'movie:42')
+  assert.equal(discovery.status, 'open')
+  assert.equal(discovery.verifiedProvider, 'Netflix')
   assert.equal((await read(first)).titles.some(title => title.id === 'ein-eigener-film'), false)
 })
