@@ -1,0 +1,24 @@
+{
+  "name": "ag-watchlist",
+  "version": "1.0.0",
+  "description": "Watchlist for Series and Film Ideas",
+  "scripts": {
+    "start": "node --env-file-if-exists=.env server.mjs",
+    "test": "node --test"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/AlexGG05/AG-Watchlist.git"
+  },
+  "type": "module",
+  "bugs": {
+    "url": "https://github.com/AlexGG05/AG-Watchlist/issues"
+  },
+  "homepage": "https://github.com/AlexGG05/AG-Watchlist#readme",
+  "engines": {
+    "node": ">=24"
+  },
+  "dependencies": {
+    "nodemailer": "10.6.1"
+  }
+}

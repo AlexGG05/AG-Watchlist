@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#111019">
+  <title>AG Watchlist</title>
+  <link rel="stylesheet" href="/style.css">
+  <script type="module" src="/app.js"></script>
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <a class="brand" href="/"><span class="brand-icon">▶</span><span>AG<span class="brand-light"> Watchlist</span></span></a>
+    <nav aria-label="Watchlist-Bereiche">
+      <span class="nav-label">MEDIATHEK</span>
+      <button data-tab="open" class="nav-active"><span>▦</span> Empfehlungen <small id="nav-count">15</small></button>
+      <button data-tab="watching"><span>▷</span> Am schauen</button>
+      <button data-tab="seen"><span>✓</span> Gesehen</button>
+      <button data-tab="reserve"><span>♧</span> Merkliste</button>
+      <button data-tab="excluded"><span>⊘</span> Ausgeschlossen</button>
+      <span class="nav-label nav-special">SPECIALS</span>
+      <button data-tab="marvel"><span>✦</span> Marvel</button>
+      <button data-tab="extras" id="extras-tab" hidden><span>♡</span> Extras</button>
+    </nav>
+    <div class="sidebar-bottom"><span class="brand-icon small">AG</span><div><strong>AG Watchlist</strong><small>Persönliche Mediathek</small></div></div>
+  </aside>
+  <main>
+    <header class="topbar"><span class="breadcrumb"><span>Mediathek</span> <b>›</b> <span id="crumb">Empfehlungen</span></span><div class="toolbar"><button class="button" id="preferences" hidden>Genre-Interessen</button><button class="button neutral" id="account">Anmelden</button></div></header>
+    <div class="content">
+      <section class="hero" id="hero">
+        <div class="hero-content">
+          <span class="eyebrow"><span></span> DEINE FILME &amp; SERIEN</span>
+          <h1>Meine Watchlist<span>.</span></h1>
+          <p>Von düsterer Magie bis zum nächsten großen Rätsel.</p>
+          <div class="hero-actions"><button class="button primary" id="hero-action">＋ Titel merken</button><button class="button" id="log-title">✓ Gesehen eintragen</button></div>
+        </div>
+        <div class="stats"><div><strong id="open-count">15</strong><span>Offen</span></div><div><strong id="watch-count">3</strong><span>Am schauen</span></div><div><strong id="seen-count">0</strong><span>Gesehen</span></div></div>
+      </section>
+      <section class="collection" aria-labelledby="heading">
+        <div class="section-head"><div><h2 id="heading">Offene Empfehlungen</h2><p id="section-note"></p></div></div>
+        <div class="filters">
+          <div class="segmented" aria-label="Titelart">
+            <button data-type="all" class="selected">Alle</button><button data-type="serie">Serien</button><button data-type="film">Filme</button>
+          </div>
+          <select id="genre" aria-label="Genre"><option value="">Alle Genres</option></select>
+          <input type="search" id="search" placeholder="Titel suchen …" aria-label="Titel suchen">
+        </div>
+        <div id="legend" aria-label="Bewertungsskala"></div>
+        <div id="cards" class="cards"></div>
+        <div id="marvel-preview"></div>
+      </section>
+    </div>
+  </main>
+</div>
+<div id="toast" role="status" hidden></div>
+<dialog id="modal"><form id="modal-form"><div class="modal-head"><h2 id="modal-title"></h2><button type="button" class="icon-button" id="close" aria-label="Schließen">×</button></div><div id="modal-fields"></div><p id="form-status" role="status"></p><div class="modal-actions" id="modal-actions"></div></form></dialog>
+</body>
+</html>

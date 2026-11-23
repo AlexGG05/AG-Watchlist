@@ -1,0 +1,427 @@
+import { createServer } from 'node:http'
+import { randomBytes, createHash, scryptSync, timingSafeEqual } from 'node:crypto'
+import { mkdirSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
+import nodemailer from 'nodemailer'
+import { catalog, genres, item, marvelOrder, newList, ratings, slug } from './catalog.mjs'
+
+const production = process.env.NODE_ENV === 'production'
+const port = Number(process.env.PORT || 3000)
+const appUrl = new URL(process.env.APP_URL || `http://localhost:${port}`)
+const secure = appUrl.protocol === 'https:'
+const tmdbToken = process.env.TMDB_READ_TOKEN
+const tmdbKey = process.env.TMDB_API_KEY
+const onlineSearch = Boolean(tmdbToken || tmdbKey)
+const smtp = process.env.SMTP_URL ? nodemailer.createTransport(process.env.SMTP_URL) : null
+if (production && (!secure || !smtp || !process.env.MAIL_FROM)) {
+  throw new Error('APP_URL (HTTPS), SMTP_URL und MAIL_FROM sind erforderlich.')
+}
+const dataDir = process.env.DATA_DIR || 'data'
+mkdirSync(dataDir, { recursive: true, mode: 0o700 })
+const db = new DatabaseSync(join(dataDir, 'watchlist.sqlite'))
+db.exec(`
+  PRAGMA journal_mode = WAL;
+  PRAGMA foreign_keys = ON;
+  CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY, email TEXT UNIQUE NOT NULL, password TEXT NOT NULL,
+    verified INTEGER NOT NULL DEFAULT 0, verify_hash TEXT, verify_expires INTEGER, list TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS sessions (
+    hash TEXT PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id), expires INTEGER NOT NULL
+  );
+`)
+const monthFormatter = new Intl.DateTimeFormat('de-DE', { timeZone: 'Europe/Berlin', month: 'numeric' })
+const day = 86_400_000
+const hash = token => createHash('sha256').update(token).digest('hex')
+const token = () => randomBytes(32).toString('base64url')
+const fail = (status, message) => Object.assign(new Error(message), { status })
+function passwordHash(password, salt = randomBytes(16).toString('hex')) {
+  return `${salt}:${scryptSync(password, salt, 64).toString('hex')}`
+}
+function matches(password, saved) {
+  return timingSafeEqual(Buffer.from(passwordHash(password, saved.split(':')[0])), Buffer.from(saved))
+}
+function sessionId(req) {
+  return /(?:^|;\s*)watch_session=([\w-]{43})(?:;|$)/.exec(req.headers.cookie || '')?.[1]
+}
+function getUser(req) {
+  const id = sessionId(req)
+  if (!id) return null
+  return db.prepare('SELECT users.* FROM users JOIN sessions ON users.id = sessions.user_id WHERE hash = ? AND expires > ?').get(hash(id), Date.now())
+}
+function sessionCookie(value, maxAge) {
+  return `watch_session=${value}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${secure ? '; Secure' : ''}`
+}
+function startSession(res, userId) {
+  const id = token()
+  db.prepare('DELETE FROM sessions WHERE expires <= ?').run(Date.now())
+  db.prepare('INSERT INTO sessions VALUES (?, ?, ?)').run(hash(id), userId, Date.now() + 30 * day)
+  res.setHeader('Set-Cookie', sessionCookie(id, 30 * 86400))
+}
+const staticFiles = new Map([
+  ['/', ['index.html','text/html; charset=utf-8']], ['/app.js',['app.js','text/javascript; charset=utf-8']],
+  ['/style.css',['style.css','text/css; charset=utf-8']], ['/stills.webp',['stills.webp','image/webp']],
+  ['/hero.webp',['hero.webp','image/webp']],
+])
+function json(res, data, status = 200) {
+  res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' })
+  res.end(JSON.stringify(data))
+}
+async function body(req) {
+  if (!req.headers['content-type']?.startsWith('application/json')) throw fail(415, 'JSON erforderlich.')
+  let incoming = ''
+  for await (const part of req) {
+    incoming += part
+    if (incoming.length > 8192) throw fail(413, 'Die Eingabe ist zu lang.')
+  }
+  try {
+    const value = JSON.parse(incoming)
+    if (!value || typeof value !== 'object' || Array.isArray(value)) throw Error()
+    return value
+  } catch {
+    throw fail(400, 'Ungültige Eingabe.')
+  }
+}
+function eligible(title, entries) {
+  return !title.predecessor || ['seen','excluded'].includes(entries[title.predecessor]?.status)
+}
+function currentMarvel(entries) {
+  return marvelOrder.find(id => !['seen','excluded'].includes(entries[id]?.status))
+}
+function fill(list) {
+  const { entries, custom } = list
+  const interests = list.interests || []
+  const score = entry => entry.genres.filter(genre => interests.includes(genre)).length
+  const all = new Map([...catalog, ...Object.values(custom).map(entry => [entry.id, entry])])
+  const active = Object.keys(entries).filter(id => entries[id].status === 'open' && !marvelOrder.includes(id))
+  const hasFilm = active.some(id => all.get(id)?.type === 'film')
+  const changed = []
+  while (active.length < 15) {
+    const candidates = [...all.values()].filter(entry => eligible(entry, entries) &&
+      (entries[entry.id]?.status === 'reserve' || (!entries[entry.id] && entry.pool === 'discovery')))
+    const requireFilm = !hasFilm && !changed.some(entry => entry.type === 'film')
+    const match = entry => !requireFilm || entry.type === 'film'
+    candidates.sort((a, b) => {
+      const priority = entry => Number(entries[entry.id]?.status === 'reserve')
+      return priority(b) - priority(a) || score(b) - score(a) || Number(Boolean(b.tmdb)) - Number(Boolean(a.tmdb))
+    })
+    const next = candidates.find(match) || candidates[0]
+    if (!next) break
+    entries[next.id] = { status: 'open', rating: '', suggested: entries[next.id]?.status !== 'reserve' }
+    active.push(next.id)
+    changed.push(next)
+  }
+  return changed.map(entry => entry.title)
+}
+function view(list, user) {
+  const { entries, custom, rewatch } = list
+  const nextMarvel = currentMarvel(entries)
+  const today = Date.now()
+  const available = id => catalog.get(id) || custom[id]
+  const titles = Object.entries(entries)
+    .filter(([id, record]) => id !== nextMarvel && available(id) && (record.status !== 'reserve' || eligible(available(id), entries)))
+    .map(([id, record]) => ({ ...available(id), ...record }))
+  const current = nextMarvel ? { ...catalog.get(nextMarvel), status: 'open', ...entries[nextMarvel] } : null
+  const seasonal = monthFormatter.format(today) === '12'
+    ? [...catalog.values()].filter(entry => entry.pool === 'seasonal' && !entries[entry.id]) : []
+  const favorites = titles.filter(entry => entry.status === 'seen' && entry.rating.startsWith('Lieblings') &&
+    (rewatch[entry.id]?.offeredAt === rewatch[entry.id]?.acknowledgedAt
+      ? today - Math.max(entry.seenAt || 0, rewatch[entry.id]?.offeredAt || 0) >= 183 * day
+      : Boolean(rewatch[entry.id]?.offeredAt)))
+  return { user: user ? { email: user.email } : null, titles, marvel: current, seasonal, favorites, genres, ratings, interests: list.interests || [], onlineSearch }
+}
+function save(user, list) {
+  db.prepare('UPDATE users SET list = ? WHERE id = ?').run(JSON.stringify(list), user.id)
+}
+function offerFavorites(user, list) {
+  const now = Date.now()
+  let changed = false
+  for (const [id, record] of Object.entries(list.entries)) {
+    if (record.status !== 'seen' || !record.rating.startsWith('Lieblings')) continue
+    const prior = list.rewatch[id]
+    if (prior?.offeredAt !== prior?.acknowledgedAt || now - Math.max(record.seenAt || 0, prior?.offeredAt || 0) < 183 * day) continue
+    list.rewatch[id] = { offeredAt: now }
+    changed = true
+  }
+  if (changed) save(user, list)
+}
+const attempts = new Map()
+function throttle(key, limit) {
+  const now = Date.now()
+  if (attempts.size > 2000) for (const [id, info] of attempts) if (info.until <= now) attempts.delete(id)
+  const old = attempts.get(key)
+  const entry = old && old.until > now ? old : { count: 0, until: now + 15 * 60_000 }
+  if (entry.count >= limit) throw fail(429, 'Zu viele Versuche. Bitte versuche es später erneut.')
+  entry.count++
+  attempts.set(key, entry)
+}
+const validEmail = email => email.length <= 254 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
+
+async function sendVerification(email, verifyToken) {
+  const link = new URL('/verify', appUrl)
+  link.searchParams.set('token', verifyToken)
+  if (smtp) {
+    await smtp.sendMail({ from: process.env.MAIL_FROM, to: email, subject: 'AG Watchlist · E-Mail bestätigen',
+      text: `Bestätige deine E-Mail für AG Watchlist: ${link}\nDieser Link ist 24 Stunden gültig.` })
+  } else {
+    console.info(`Entwicklung · Bestätigungslink für ${email}: ${link}`)
+  }
+}
+const tmdbGenres = {
+  Fantasy: [14, 10765], Mystery: [9648], Krimi: [80], Thriller: [53, 9648],
+  Magie: [14, 10765], Übernatürliches: [14, 10765, 27], Action: [28, 10759],
+  'Sci-Fi': [878, 10765], Humor: [35], Intrigen: [53, 18], Abenteuer: [12, 10759],
+  Märchen: [14], Mythologie: [14, 36], Drama: [18], Historie: [36], Horror: [27],
+  Romanze: [10749, 18], Dokumentation: [99], Animation: [16], Musik: [10402], Western: [37], Krieg: [10752, 10768],
+}
+async function tmdb(path, params) {
+  const url = new URL(`https://api.themoviedb.org/3/${path}`)
+  for (const [key, value] of Object.entries(params)) url.searchParams.set(key, value)
+  if (!tmdbToken) url.searchParams.set('api_key', tmdbKey)
+  const headers = tmdbToken ? { Authorization: `Bearer ${tmdbToken}` } : {}
+  const response = await fetch(url, { headers, signal: AbortSignal.timeout(3500) })
+  if (!response.ok) throw Error(`TMDB ${response.status}`)
+  return response.json()
+}
+async function searchTitles(list, interests) {
+  if (!onlineSearch) return []
+  const genreIds = [...new Set(interests.flatMap(genre => tmdbGenres[genre] || []))]
+  const pages = await Promise.allSettled(['tv', 'movie'].map(async type => {
+    const result = await tmdb(`discover/${type}`, {
+      language: 'de-DE', include_adult: 'false', sort_by: 'popularity.desc', watch_region: 'DE',
+      with_watch_providers: '8|337|9', without_genres: interests.includes('Animation') ? '10751|10762' : '10751|10762|16',
+      'vote_count.gte': 30, page: 1 + (list.discoveryPage || 0) % 12,
+      ...(genreIds.length ? { with_genres: genreIds.join('|') } : {}),
+    })
+    const candidates = result.results.filter(result => {
+      const title = result.title || result.name
+      return title && !catalog.has(slug(title)) && !Object.hasOwn(list.entries, slug(title))
+        && !Object.hasOwn(list.custom, slug(title)) && (result.first_air_date || result.release_date || '9999') <= new Date().toISOString().slice(0, 10)
+    }).slice(0, 10)
+    const details = await Promise.allSettled(candidates.map(async result => {
+      const details = await tmdb(`${type}/${result.id}`, {
+        language: 'de-DE', append_to_response: 'watch/providers',
+      })
+      // Film collections need a confirmed viewing order before entering automatic recommendations.
+      if (details.belongs_to_collection || /marvel/i.test(details.production_companies?.map(company => company.name).join(' '))) return null
+      const title = details.title || details.name
+      if (!title) return null
+      const matched = interests.filter(genre => tmdbGenres[genre]?.some(id => result.genre_ids.includes(id)))
+      const tags = [...new Set([...matched, ...details.genres.map(genre => genre.name).filter(genre => genres.includes(genre))])]
+      const reason = matched.length ? `Passt zu deinen Genre-Interessen ${matched.join(', ')}.` : ''
+      const studios = details['watch/providers']?.results?.DE?.flatrate || []
+      const providers = studios.filter(service => [8, 337, 9, 119].includes(service.provider_id)).map(service => service.provider_name)
+      const extent = type === 'tv' && details.seasons ? details.seasons.filter(season => season.season_number > 0 &&
+        season.air_date && season.air_date <= new Date().toISOString().slice(0, 10)).length : 0
+      return {
+        ...item(title, type === 'tv' ? 'serie' : 'film', tags.join(', '), [reason, details.overview?.slice(0, 200)].filter(Boolean).join(' '),
+          extent ? `${extent} ${extent === 1 ? 'Staffel' : 'Staffeln'}` : '', 'discovery'),
+        verifiedProvider: providers.length ? providers.join(', ') : '',
+        tmdb: `${type}:${result.id}`,
+      }
+    }))
+    return details.flatMap(result => result.status === 'fulfilled' && result.value ? [result.value] : [])
+  }))
+  if (pages.every(page => page.status === 'rejected')) throw Error('TMDB nicht erreichbar')
+  return pages.flatMap(page => page.status === 'fulfilled' ? page.value : [])
+}
+function addDiscoveries(list, suggestions) {
+  for (const entry of suggestions) {
+    if (Object.hasOwn(list.entries, entry.id) || Object.hasOwn(list.custom, entry.id) || catalog.has(entry.id) ||
+        Object.values(list.custom).some(other => other.tmdb === entry.tmdb)) continue
+    Object.defineProperty(list.custom, entry.id, { value: entry, enumerable: true, writable: true })
+  }
+}
+function mutate(list, input) {
+  const { id, action, rating } = input
+  const { entries, custom } = list
+  if (action === 'preferences') {
+    if (!Array.isArray(input.interests) || input.interests.some(genre => !genres.includes(genre))) throw fail(400, 'Ungültige Genres.')
+    list.interests = [...new Set(input.interests)]
+    for (const [id, record] of Object.entries(entries)) if (record.status === 'open' && record.suggested) delete entries[id]
+    return fill(list)
+  }
+  if (action === 'add' || action === 'log') {
+    const title = typeof input.title === 'string' ? input.title.trim() : ''
+    if (!title || title.length > 140 || !['film','serie'].includes(input.type) ||
+        (input.genre && !genres.includes(input.genre))) throw fail(400, 'Bitte prüfe Titel, Art und Genre.')
+    const key = slug(title)
+    if (!key) throw fail(400, 'Bitte gib einen gültigen Titel ein.')
+    if (Object.hasOwn(entries, key) || marvelOrder.includes(key)) {
+      if (action === 'log') return mutate(list, { action: 'seen', id: key, rating })
+      throw fail(409, 'Dieser Titel ist bereits erfasst.')
+    }
+    const known = catalog.get(key) || (Object.hasOwn(custom, key) ? custom[key] : null)
+    const type = known?.type || input.type
+    if (action === 'log' && rating && (!ratings.includes(rating) ||
+        (rating === 'Lieblingsfilm' && type !== 'film') || (rating === 'Lieblingsserie' && type !== 'serie'))) {
+      throw fail(400, 'Diese Bewertung passt nicht zur Titelart.')
+    }
+    if (!known) {
+      const reason = typeof input.reason === 'string' ? input.reason.trim().slice(0, 400) : ''
+      const predecessor = typeof input.predecessor === 'string' ? slug(input.predecessor.trim()) : ''
+      const previous = Object.hasOwn(entries, predecessor) && (catalog.get(predecessor) || custom[predecessor])
+      if (predecessor && (input.type !== 'film' || previous?.type !== 'film' || marvelOrder.includes(predecessor))) {
+        throw fail(400, 'Der vorherige Teil muss ein Film sein, der bereits in deiner Liste steht.')
+      }
+      const entry = item(title, input.type, input.genre, reason)
+      if (predecessor) entry.predecessor = predecessor
+      Object.defineProperty(custom, key, { value: entry, enumerable: true, writable: true })
+    }
+    if (action === 'log' && known && !eligible(known, entries)) throw fail(409, 'Ein früherer Teil ist zuerst an der Reihe.')
+    const record = action === 'log'
+      ? { status: 'seen', rating: rating || '', seenAt: Date.now() }
+      : { status: 'reserve', rating: '' }
+    Object.defineProperty(entries, key, { value: record, enumerable: true, writable: true })
+    return fill(list)
+  }
+  if (typeof id !== 'string') throw fail(400, 'Titel fehlt.')
+  const existing = Object.hasOwn(entries, id) ? entries[id] : null
+  const title = catalog.get(id) || (Object.hasOwn(custom, id) ? custom[id] : null)
+  const next = currentMarvel(entries)
+  if (!title || (!existing && id !== next && title.pool !== 'seasonal')) throw fail(404, 'Titel nicht gefunden.')
+  if (title.pool === 'seasonal' && !existing && monthFormatter.format(Date.now()) !== '12') throw fail(404, 'Titel nicht gefunden.')
+  if (action === 'rewatch' && list.rewatch[id]?.offeredAt && existing?.status === 'seen') {
+    list.rewatch[id].acknowledgedAt = list.rewatch[id].offeredAt
+    return []
+  }
+  if (existing?.status === 'excluded') throw fail(409, 'Dieser Titel ist dauerhaft ausgeschlossen.')
+  if (existing?.status === 'seen' && action !== 'seen') throw fail(409, 'Dieser Titel bleibt im Archiv.')
+  if (!['watching','seen','excluded','reserve'].includes(action)) throw fail(400, 'Unbekannter Status.')
+  if (!eligible(title, entries)) throw fail(409, 'Ein früherer Teil ist zuerst an der Reihe.')
+  if (action === 'reserve' && (existing || title.pool !== 'seasonal')) throw fail(409, 'Dieser Titel kann hier nicht vorgemerkt werden.')
+  if (action === 'seen' && rating && (!ratings.includes(rating) ||
+    (rating === 'Lieblingsserie' && title.type !== 'serie') ||
+    (rating === 'Lieblingsfilm' && title.type !== 'film'))) throw fail(400, 'Diese Bewertung passt nicht zur Titelart.')
+  entries[id] = {
+    status: action,
+    rating: action === 'seen' ? rating || existing?.rating || '' : '',
+    ...(action === 'seen' ? { seenAt: existing?.rating === rating && existing?.seenAt || Date.now() } : {}),
+  }
+  return fill(list)
+}
+
+createServer(async (req, res) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff')
+  res.setHeader('Referrer-Policy', 'no-referrer')
+  res.setHeader('Content-Security-Policy', "default-src 'self'; style-src 'self'; frame-ancestors 'none'; form-action 'self'; base-uri 'none'")
+  try {
+    const url = new URL(req.url, appUrl)
+    const path = url.pathname
+    if (req.method === 'GET' && path === '/health') return json(res, { ok: true })
+    if (req.method === 'GET' && path === '/verify') {
+      const secret = url.searchParams.get('token') || ''
+      const user = db.prepare('SELECT id FROM users WHERE verify_hash = ? AND verify_expires > ? AND verified = 0').get(hash(secret), Date.now())
+      if (user) db.prepare('UPDATE users SET verified = 1, verify_hash = NULL, verify_expires = NULL WHERE id = ?').run(user.id)
+      res.writeHead(303, { Location: user ? '/?verified=1' : '/?verified=0', 'Cache-Control': 'no-store' })
+      return res.end()
+    }
+    if (req.method === 'GET' && staticFiles.has(path)) {
+      const [file, type] = staticFiles.get(path)
+      let bytes
+      try { bytes = readFileSync(new URL(`./public/${file}`, import.meta.url)) } catch { throw fail(404, 'Datei nicht gefunden.') }
+      res.writeHead(200, { 'Content-Type': type })
+      return res.end(bytes)
+    }
+    if (req.method === 'GET' && path === '/api/list') {
+      const user = getUser(req)
+      const list = user ? JSON.parse(user.list) : newList('watchlist')
+      if (user) offerFavorites(user, list)
+      else for (const [id, entry] of Object.entries(list.entries)) if (entry.status !== 'open') delete list.entries[id]
+      return json(res, view(list, user))
+    }
+    if (req.method !== 'POST' || !path.startsWith('/api/')) throw fail(404, 'Nicht gefunden.')
+    if (req.headers.origin && req.headers.origin !== appUrl.origin &&
+        (production || req.headers['sec-fetch-site'] !== 'same-origin')) throw fail(403, 'Ungültiger Ursprung.')
+    const input = await body(req)
+    if (['/api/register','/api/resend','/api/login'].includes(path)) {
+      const email = typeof input.email === 'string' ? input.email.trim().toLowerCase() : ''
+      const password = typeof input.password === 'string' ? input.password : ''
+      const authAddress = req.socket.remoteAddress
+      throttle(`${path}:ip:${authAddress}`, path === '/api/login' ? 60 : 20)
+      if (!validEmail(email)) throw fail(400, 'Bitte gib eine gültige E-Mail-Adresse ein.')
+      throttle(`${path}:email:${email}`, path === '/api/login' ? 10 : 3)
+      const user = db.prepare('SELECT * FROM users WHERE email = ?').get(email)
+      if (path === '/api/login') {
+        if (password.length > 128) throw fail(401, 'E-Mail oder Passwort stimmt nicht.')
+        const passwordValid = matches(password, user?.password || dummyPassword)
+        if (!user || !passwordValid) throw fail(401, 'E-Mail oder Passwort stimmt nicht.')
+        if (!user.verified) throw fail(403, 'Bitte bestätige zuerst deine E-Mail-Adresse.')
+        startSession(res, user.id)
+        return json(res, { ok: true })
+      }
+      if (path === '/api/register' && (password.length < 10 || password.length > 128)) throw fail(400, 'Das Passwort muss 10 bis 128 Zeichen haben.')
+      if (!user && path === '/api/register') {
+        const list = newList(input.profile === 'watchlist' ? 'watchlist' : 'new')
+        fill(list)
+        const link = token()
+        const result = db.prepare('INSERT INTO users (email, password, verify_hash, verify_expires, list) VALUES (?, ?, ?, ?, ?)')
+          .run(email, passwordHash(password), hash(link), Date.now() + day, JSON.stringify(list))
+        try { await sendVerification(email, link) } catch (error) {
+          db.prepare('DELETE FROM users WHERE id = ? AND verified = 0 AND verify_hash = ?').run(result.lastInsertRowid, hash(link))
+          throw error
+        }
+      } else if (user && !user.verified && path === '/api/resend') {
+        const link = token()
+        db.prepare('UPDATE users SET verify_hash = ?, verify_expires = ? WHERE id = ?').run(hash(link), Date.now() + day, user.id)
+        await sendVerification(email, link)
+      }
+      return json(res, { message: 'Wenn die Adresse registriert werden kann, erhältst du einen Bestätigungslink per E-Mail.' })
+    }
+    if (path === '/api/logout') {
+      const id = sessionId(req)
+      if (id) db.prepare('DELETE FROM sessions WHERE hash = ?').run(hash(id))
+      res.setHeader('Set-Cookie', sessionCookie('', 0))
+      return json(res, { ok: true })
+    }
+    if (path === '/api/list') {
+      const user = getUser(req)
+      if (!user) throw fail(401, 'Bitte melde dich an, um die Liste zu bearbeiten.')
+      const list = JSON.parse(user.list)
+      const promoted = mutate(list, input)
+      save(user, list)
+      const needsMore = Object.values(list.entries).filter(record => record.status === 'open').length < 15
+      const localFallbacks = promoted.map(slug).filter(id => catalog.get(id)?.pool === 'discovery' && list.entries[id]?.suggested)
+      let searchWarning = ''
+      if (onlineSearch && (input.action === 'preferences' || needsMore || localFallbacks.length)) {
+        try {
+          const suggestions = await searchTitles(list, list.interests || [])
+          const fresh = getUser(req)
+          if (!fresh) return json(res, { ...view(list, user), promoted })
+          const current = JSON.parse(fresh.list)
+          current.discoveryPage = (current.discoveryPage || 0) + 1
+          const interestsMatch = JSON.stringify(current.interests) === JSON.stringify(list.interests)
+          if (interestsMatch) {
+            addDiscoveries(current, suggestions)
+            if (suggestions.length) {
+              const refreshed = new Set()
+              for (const [id, record] of Object.entries(current.entries)) {
+                if (record.status === 'open' && record.suggested &&
+                    (input.action === 'preferences' || localFallbacks.includes(id))) {
+                  delete current.entries[id]
+                  refreshed.add(id)
+                }
+              }
+              const retained = promoted.filter(title => !refreshed.has(slug(title)))
+              promoted.splice(0, promoted.length, ...retained)
+            }
+            promoted.push(...fill(current))
+          }
+          save(fresh, current)
+          return json(res, { ...view(current, fresh), promoted })
+        } catch (error) {
+          searchWarning = 'Die Online-Suche war nicht erreichbar. Deine Änderungen wurden gespeichert.'
+          const fresh = getUser(req)
+          if (fresh) return json(res, { ...view(JSON.parse(fresh.list), fresh), promoted, searchWarning })
+        }
+      }
+      return json(res, { ...view(list, user), promoted, searchWarning })
+    }
+    throw fail(404, 'Nicht gefunden.')
+  } catch (error) {
+    if (!error.status) console.error(error.code || error.name)
+    json(res, { error: error.status ? error.message : 'Der Vorgang ist fehlgeschlagen. Bitte versuche es erneut.' }, error.status || 500)
+  }
+}).listen(port, '0.0.0.0', () => console.info(`AG Watchlist läuft auf Port ${port}`))
+const dummyPassword = passwordHash(token())
