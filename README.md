@@ -25,6 +25,10 @@ Die Mediathek und die API für persönliche Listen setzen ein bestätigtes Konto
 
 Ab zwei Mitgliedern zeigt **Gemeinsam schauen** Vorschläge aus den persönlichen Empfehlungen und dem lokalen Katalog. Die Rangfolge berücksichtigt die Genre-Interessen und den Seh- und Bewertungsverlauf aller Mitglieder. Gemerkte, gesehene, laufende und ausgeschlossene Titel werden bei allen Mitgliedern berücksichtigt und aus den gemeinsamen Vorschlägen entfernt. Persönliche Listen, Bewertungen und Staffelstände bleiben im jeweiligen Konto.
 
+Unter **Date** startet ihr eine gemeinsame Runde. Beide sehen dieselben Karten aus Merklisten, laufenden Titeln und neuen Empfehlungen. Gesehene und ausgeschlossene Titel einer der beiden Personen werden übersprungen. Stimmen werden getrennt gespeichert. Die gemeinsamen Treffer erscheinen nach der letzten Stimme beider Personen.
+
+Die globale Titelsuche oben bietet Merkliste und Gesehen-Auswahl an derselben Stelle.
+
 ## Empfehlungen
 
 - Genre-Interessen lassen sich jederzeit speichern. Bewertungen gesehener Titel mit Genre beeinflussen künftige Vorschläge ebenfalls. Das Speichern der Interessen aktualisiert automatisch entdeckte Empfehlungen, während gemerkte, laufende und bereits gesehene Titel erhalten bleiben. Unter **Titel merken** und **Gesehen eintragen** sucht TMDB nach Filmen und Serien. Die App übernimmt Titelart, Genres, Poster und Beschreibung direkt aus dem ausgewählten Treffer. Mehrere Filme und einzelne Serien-Staffeln können zusammen erfasst werden. Serien mit offenen Staffeln stehen unter **Am schauen**. Ein Klick auf die Karte öffnet die Beschreibung, die Bewertung und bei Serien die Staffelverwaltung. Die manuelle Eingabe bleibt für Titel ohne Treffer oder ohne TMDB-Konfiguration verfügbar.

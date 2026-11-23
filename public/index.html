@@ -33,6 +33,7 @@
       <button data-tab="excluded"><span>⊘</span> Ausgeschlossen</button>
       <span class="nav-label nav-special">GEMEINSAM</span>
       <button data-tab="household"><span>⌂</span> Haushalt</button>
+      <button data-tab="date"><span>♡</span> Date</button>
       <span class="nav-label nav-special">ENTDECKEN</span>
       <button data-tab="universes"><span>✦</span> Universen</button>
       <button data-tab="extras" id="extras-tab" hidden><span>♡</span> Extras</button>
@@ -40,18 +41,18 @@
     <div class="sidebar-bottom"><span class="brand-icon small">AG</span><div><strong>AG Watchlist</strong><small>Persönliche Mediathek</small></div></div>
   </aside>
   <main>
-    <header class="topbar"><span class="breadcrumb"><span>Mediathek</span> <b>›</b> <span id="crumb">Empfehlungen</span></span><div class="toolbar"><button class="button" id="preferences" hidden>Genre-Interessen</button><button class="button neutral" id="account">Anmelden</button></div></header>
+    <header class="topbar"><span class="breadcrumb"><span>Mediathek</span> <b>›</b> <span id="crumb">Empfehlungen</span></span><form class="global-search" id="global-search" role="search"><input type="search" id="global-query" aria-label="Filme und Serien suchen" placeholder="Filme und Serien suchen …" minlength="2" maxlength="120" required><button class="button" aria-label="Suche starten">⌕</button></form><div class="toolbar"><button class="button" id="preferences" hidden>Genre-Interessen</button><button class="button neutral" id="account">Anmelden</button></div></header>
     <div class="content">
       <section class="hero" id="hero">
         <div class="hero-content">
           <span class="eyebrow"><span></span> DEINE FILME &amp; SERIEN</span>
           <h1>Meine Watchlist<span>.</span></h1>
           <p>Von düsterer Magie bis zum nächsten großen Rätsel.</p>
-          <div class="hero-actions"><button class="button primary" id="hero-action">＋ Titel merken</button><button class="button" id="log-title">✓ Gesehen eintragen</button></div>
         </div>
         <div class="stats"><div><strong id="open-count">15</strong><span>Offen</span></div><div><strong id="watch-count">3</strong><span>Am schauen</span></div><div><strong id="seen-count">0</strong><span>Gesehen</span></div></div>
       </section>
       <section class="household-page" id="household-page" aria-labelledby="household-heading" hidden></section>
+      <section class="date-page" id="date-page" aria-labelledby="date-heading" hidden></section>
       <section class="universe-page" id="universe-page" aria-labelledby="universe-heading" hidden></section>
       <section class="collection" id="personal-collection" aria-labelledby="heading">
         <div class="section-head"><div><h2 id="heading">Offene Empfehlungen</h2><p id="section-note"></p></div><button class="button" id="refresh-recommendations" hidden>↻ Neue Vorschläge</button></div>
@@ -60,7 +61,7 @@
             <button data-type="all" class="selected">Alle</button><button data-type="serie">Serien</button><button data-type="film">Filme</button>
           </div>
           <select id="genre" aria-label="Genre"><option value="">Alle Genres</option></select>
-          <input type="search" id="search" placeholder="Titel suchen …" aria-label="Titel suchen">
+          <input type="search" id="search" placeholder="Liste filtern …" aria-label="Aktuelle Liste filtern">
         </div>
         <div id="legend" aria-label="Bewertungsskala"></div>
         <div id="cards" class="cards"></div>

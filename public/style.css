@@ -147,7 +147,6 @@ dialog::backdrop{background:#0a0712bb}
   .hero p{display:none}
   .hero-content{width:100%}
   .hero-actions{margin-top:12px;gap:8px}
-  .hero .hero-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}
   .stats{width:100%;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}
   .stats div{min-width:0}
   .stats span{white-space:normal}
@@ -199,3 +198,23 @@ dialog::backdrop{background:#0a0712bb}
 .universe-motif{width:max-content;max-width:100%;padding:3px 9px;align-self:start;font-size:27px;font-weight:850;line-height:1.35;letter-spacing:-.045em;color:var(--universe-accent);border-radius:7px;background:#15101fd4;border:1px solid #f0e5ff24}
 .universe-name{align-self:end;font-size:14px;font-weight:750;line-height:1.25;overflow-wrap:anywhere}
 @media(max-width:700px){.universe-tiles{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.universe-tile{min-height:111px;padding:9px}.universe-name{font-size:13px}}
+.topbar{gap:12px}
+.global-search{display:flex;gap:5px;flex:1;max-width:390px;min-width:0}
+.global-search input{width:100%}
+.global-search button{padding:2px 11px;font-size:19px;line-height:1}
+.date-page{display:grid;gap:14px}
+.date-stage{width:min(100%,460px);display:grid;gap:10px;margin:0 auto}
+.date-card{touch-action:pan-y;user-select:none;transition:transform .16s}
+.date-card .art{height:clamp(160px,42vw,230px)}
+.date-card.date-left{transform:translateX(-12px) rotate(-3deg)}
+.date-card.date-right{transform:translateX(12px) rotate(3deg)}
+.date-controls{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.date-controls button{min-height:44px}
+@media(prefers-reduced-motion:reduce){.date-card{transition:none}.date-card.date-left,.date-card.date-right{transform:none}}
+@media(max-width:700px){
+  .topbar{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:6px;padding-top:5px;padding-bottom:9px}
+  .global-search{grid-column:1/-1;grid-row:2;max-width:none;width:100%}
+  .global-search input{min-height:44px;font-size:16px}
+  .hero .stats{width:100%;min-width:0;grid-template-columns:repeat(3,minmax(0,1fr))}
+  .stats div{padding:5px 2px}
+}

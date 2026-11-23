@@ -6,6 +6,7 @@ const headings = {
   reserve: ['Merkliste', 'Merkliste', 'Hier findest du deine gemerkten Titel.'],
   excluded: ['Dauerhaft ausgeschlossen', 'Ausgeschlossen', 'Diese Titel werden dir nicht wieder vorgeschlagen.'],
   universes: ['Universen', 'Universen', ''],
+  date: ['Date', 'Date', ''],
   extras: ['Extras', 'Extras', 'Saisonale Empfehlungen.'],
 }
 const ratingClasses = { Schlecht: 'bad', Okay: 'ok', Gut: 'good', 'Sehr gut': 'great', Lieblingsserie: 'series', Lieblingsfilm: 'movie', 'Nicht ansehbar': 'excluded' }
@@ -219,8 +220,10 @@ function render() {
   if (!data) return
   const shared = state.tab === 'household'
   const universes = state.tab === 'universes'
-  $('hero').hidden = shared || universes
-  $('personal-collection').hidden = shared || universes
+  const date = state.tab === 'date'
+  $('hero').hidden = shared || universes || date
+  $('personal-collection').hidden = shared || universes || date
+  $('date-page').hidden = !date
   $('universe-page').hidden = !universes
   $('refresh-recommendations').hidden = state.tab !== 'open'
   $('household-page').hidden = !shared
@@ -253,7 +256,7 @@ function render() {
   }
   if (mobileActive) $('mobile-more').removeAttribute('aria-current')
   else $('mobile-more').setAttribute('aria-current', 'page')
-  if (shared) return
+  if (shared || date) return
   if (universes) return renderUniverse()
   for (const type of document.querySelectorAll('[data-type]')) {
     type.classList.toggle('selected', type.dataset.type === state.type)
@@ -347,6 +350,9 @@ function account() {
     $('cards').replaceChildren()
     $('marvel-preview').replaceChildren()
     $('household-page').replaceChildren()
+    $('date-page').replaceChildren()
+    $('global-query').value = ''
+    clearTimeout(datePoll)
     $('universe-page').replaceChildren()
     state.universe = null
     $('modal').close()
@@ -576,7 +582,7 @@ function titleSearch(log, initialQuery = '') {
       const expanded = !details.hidden
       details.hidden = expanded
       artwork.setAttribute('aria-expanded', String(!expanded))
-      if (!expanded && log && entry.type === 'serie') loadSeasons()
+      if (!expanded && log !== false && entry.type === 'serie') loadSeasons()
     }, 'lookup-art')
     artwork.setAttribute('aria-label', `Beschreibung zu ${entry.title}`)
     artwork.setAttribute('aria-expanded', 'false')
@@ -627,11 +633,12 @@ function titleSearch(log, initialQuery = '') {
       row.append(artwork, copy, details)
       return row
     }
-    if (!log) {
-      if (!entry.status) copy.append(submit('Titel merken', () => update({
-        action: 'remember-selection', items: [{ tmdb: entry.tmdb, watched: [] }],
-      }), 'button compact'))
-    } else if (entry.type === 'film') {
+    if (log !== true && (!entry.status || (entry.status === 'open' && entry.libraryId))) {
+      copy.append(submit('Titel merken', () => update(entry.libraryId && entry.status === 'open'
+        ? { action: 'reserve', id: entry.libraryId }
+        : { action: 'remember-selection', items: [{ tmdb: entry.tmdb, watched: [] }] }), 'button compact'))
+    }
+    if (log !== false && entry.type === 'film') {
       const label = make('label', 'checkbox')
       const checkbox = make('input')
       Object.assign(checkbox, { type: 'checkbox', checked: entry.status === 'seen' || selected.has(entry.tmdb), disabled: entry.status === 'seen' })
@@ -641,7 +648,7 @@ function titleSearch(log, initialQuery = '') {
       })
       label.append(checkbox, 'Gesehen')
       if (entry.status !== 'seen') copy.append(label)
-    } else {
+    } else if (log !== false) {
       copy.append(button('Staffeln auswählen', () => {
         details.hidden = false
         artwork.setAttribute('aria-expanded', 'true')
@@ -696,12 +703,15 @@ function titleSearch(log, initialQuery = '') {
     search()
   })
   const actions = []
-  if (log && state.data.onlineSearch) actions.push(submit('Auswahl speichern', async () => {
+  if (log !== false && state.data.onlineSearch) actions.push(submit(log === null ? 'Auswahl als gesehen speichern' : 'Auswahl speichern', async () => {
     if (!selected.size) throw new Error('Wähle einen Film oder mindestens eine Staffel aus.')
     await update({ action: 'log-selection', items: [...selected].map(([tmdb, watched]) => ({ tmdb, watched: [...watched] })) })
   }))
-  actions.push(button('Ohne TMDB-Treffer manuell erfassen', () => addTitle(log)))
-  dialog(log ? 'Gesehen eintragen' : 'Titel merken', [queryField, searchStatus, results], actions)
+  if (log === null) {
+    actions.push(button('Titel manuell merken', () => addTitle(false)),
+      button('Gesehenen Titel manuell eintragen', () => addTitle(true)))
+  } else actions.push(button('Ohne TMDB-Treffer manuell erfassen', () => addTitle(log)))
+  dialog(log === null ? 'Filme und Serien suchen' : log ? 'Gesehen eintragen' : 'Titel merken', [queryField, searchStatus, results], actions)
   if (initialQuery && state.data.onlineSearch) {
     query.value = initialQuery
     search()
@@ -947,7 +957,7 @@ function renderHousehold(data) {
     }
     return
   }
-  toolbar.append(button('Person einladen', () => householdDialog('invite'), 'button primary'),
+  toolbar.append(button('Date', () => setTab('date', true)), button('Person einladen', () => householdDialog('invite'), 'button primary'),
     button('Haushalt verlassen', () => householdDialog('leave')))
   const members = make('div', 'household-members')
   members.append(make('h3', '', 'Mitglieder'))
@@ -974,9 +984,124 @@ async function loadHousehold() {
     if (state.tab === 'household' && state.data?.user.email === user) page.replaceChildren(make('p', 'meta', error.message))
   }
 }
+let datePoll
+let dateBusy = false
+function renderDate(data) {
+  clearTimeout(datePoll)
+  const page = $('date-page')
+  const title = make('h2', '', 'Date')
+  title.id = 'date-heading'
+  const toolbar = make('div', 'household-toolbar')
+  toolbar.append(title, button('Zum Haushalt', () => setTab('household', true)))
+  page.replaceChildren(toolbar)
+  const { round, partners } = data
+  if (!partners.length) {
+    page.append(make('p', 'meta', 'Für eine Date-Runde brauchst du eine zweite Person im Haushalt.'))
+    return
+  }
+  const status = make('p', 'meta')
+  status.setAttribute('role', 'status')
+  const user = state.data.user.email
+  async function send(input, controls) {
+    if (dateBusy) return
+    dateBusy = true
+    for (const control of controls) control.disabled = true
+    try {
+      const next = await api('date', input)
+      if (state.tab === 'date' && state.data?.user.email === user) renderDate(next)
+    } catch (error) {
+      status.textContent = error.message
+      for (const control of controls) control.disabled = false
+    } finally {
+      dateBusy = false
+    }
+  }
+  if (!round || round.complete) {
+    if (round?.complete) {
+      page.append(make('h3', '', 'Eure gemeinsamen Treffer'))
+      if (!round.matches.length) page.append(make('p', 'meta', 'Bei dieser Runde habt ihr keinen Titel beide ausgewählt.'))
+      else {
+        const cards = make('div', 'cards')
+        cards.append(...round.matches.map(entry => card(entry, false, true)))
+        page.append(cards)
+      }
+    }
+    const setup = make('div', 'date-stage')
+    let partner = partners[0]
+    if (partners.length > 1) {
+      const selector = make('select')
+      selector.setAttribute('aria-label', 'Person fürs Date auswählen')
+      for (const email of partners) selector.add(new Option(email))
+      selector.addEventListener('change', () => { partner = selector.value })
+      setup.append(selector)
+    }
+    const start = button(round ? 'Neue Date-Runde' : 'Date-Runde starten', () => send({ action: 'start', partner }, [start]), 'button primary')
+    setup.append(start, status)
+    page.append(setup)
+    return
+  }
+  const stage = make('div', 'date-stage')
+  stage.append(make('p', 'meta', `Date mit ${round.partner}`))
+  if (!round.next) {
+    stage.append(make('h3', '', 'Deine Auswahl ist gespeichert.'),
+      make('p', 'meta', 'Eure Treffer erscheinen, sobald die andere Person fertig ist.'))
+    const refresh = button('Treffer aktualisieren', loadDate)
+    stage.append(refresh)
+    datePoll = setTimeout(loadDate, 4000)
+    page.append(stage)
+    return
+  }
+  stage.append(make('p', 'meta', `Karte ${round.voted + 1} von ${round.total}`))
+  const deckCard = card(round.next, false, true)
+  deckCard.classList.add('date-card')
+  const controls = make('div', 'date-controls')
+  const vote = liked => send({ action: 'vote', roundId: round.id, slot: round.voted, liked }, [no, yes])
+  const no = button('← Gerade nicht', () => vote(false))
+  const yes = button('Lust drauf →', () => vote(true), 'button primary')
+  controls.append(no, yes)
+  let start
+  let swiped = false
+  deckCard.addEventListener('pointerdown', event => {
+    if (!event.isPrimary || event.button !== 0) return
+    swiped = false
+    start = { id: event.pointerId, x: event.clientX, y: event.clientY }
+    deckCard.setPointerCapture?.(event.pointerId)
+  })
+  deckCard.addEventListener('pointercancel', () => { start = null })
+  deckCard.addEventListener('pointerup', event => {
+    if (start?.id !== event.pointerId) return
+    const dx = event.clientX - start.x
+    const dy = event.clientY - start.y
+    start = null
+    if (Math.abs(dx) < 55 || Math.abs(dx) < Math.abs(dy) * 1.25) return
+    swiped = true
+    deckCard.classList.add(dx > 0 ? 'date-right' : 'date-left')
+    vote(dx > 0)
+  })
+  deckCard.addEventListener('click', event => {
+    if (swiped) event.stopImmediatePropagation()
+  }, { capture: true })
+  stage.append(deckCard, controls, status)
+  page.append(stage)
+}
+async function loadDate() {
+  clearTimeout(datePoll)
+  if (state.tab !== 'date' || !state.data?.user) return
+  const user = state.data.user.email
+  const page = $('date-page')
+  if (!page.childElementCount) page.append(make('p', 'meta', 'Date wird geladen …'))
+  try {
+    const data = await api('date')
+    if (state.tab === 'date' && state.data?.user.email === user) renderDate(data)
+  } catch (error) {
+    if (state.tab === 'date' && state.data?.user.email === user) {
+      page.replaceChildren(make('p', 'meta', error.message), button('Erneut laden', loadDate))
+    }
+  }
+}
 function mobileMore() {
   const actions = [
-    ['Gesehenes Archiv', 'seen'], ['Dauerhaft ausgeschlossen', 'excluded'], ['Haushalt', 'household'],
+    ['Gesehenes Archiv', 'seen'], ['Dauerhaft ausgeschlossen', 'excluded'], ['Haushalt', 'household'], ['Date', 'date'],
   ]
   if (!$('extras-tab').hidden) actions.push(['Extras', 'extras'])
   const controls = actions.map(([label, tab]) => button(label, () => {
@@ -988,12 +1113,14 @@ function mobileMore() {
   dialog('Weitere Bereiche', [], controls)
 }
 function setTab(tab, scroll = false) {
+  clearTimeout(datePoll)
   state.tab = tab
   state.type = 'all'
   $('genre').value = ''
   $('search').value = ''
   render()
   if (tab === 'household') loadHousehold()
+  if (tab === 'date') loadDate()
   if (scroll) window.scrollTo(0, 0)
 }
 $('refresh-recommendations').addEventListener('click', async event => {
@@ -1020,8 +1147,22 @@ $('refresh-recommendations').addEventListener('click', async event => {
   }
 })
 $('account').addEventListener('click', account)
-$('hero-action').addEventListener('click', () => titleSearch(false))
-$('log-title').addEventListener('click', () => titleSearch(true))
+function openGlobalSearch() {
+  const query = $('global-query')
+  if (query.value.trim().length < 2 || $('modal').open) return
+  titleSearch(null, query.value.trim())
+  query.value = ''
+}
+let globalSearchTimer
+$('global-search').addEventListener('submit', event => {
+  event.preventDefault()
+  clearTimeout(globalSearchTimer)
+  openGlobalSearch()
+})
+$('global-query').addEventListener('input', () => {
+  clearTimeout(globalSearchTimer)
+  globalSearchTimer = setTimeout(openGlobalSearch, 350)
+})
 $('preferences').addEventListener('click', preferences)
 $('close').addEventListener('click', () => { if (!busy) $('modal').close() })
 $('modal').addEventListener('cancel', event => { if (busy) event.preventDefault() })

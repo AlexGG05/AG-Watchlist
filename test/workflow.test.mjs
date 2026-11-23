@@ -265,6 +265,43 @@ test('separate verified accounts retain their watchlists and recommendation rule
   assert.equal(shared.recommendations.some(title => title.title === 'Ein eigener Film'), false)
   assert.equal(shared.recommendations.some(title => title.rating !== undefined || title.status !== undefined), false)
   assert.equal((await read(first)).titles.some(title => title.title === 'Ein eigener Film'), false)
+  const date = async cookie => (await fetch(`${origin}/api/date`, { headers: { Cookie: cookie } })).json()
+  const started = await post('date', { action: 'start' }, first)
+  assert.equal(started.status, 200)
+  let a = (await started.json()).round
+  let b = (await date(second)).round
+  assert.equal(a.id, b.id)
+  assert.deepEqual(a.next, b.next)
+  assert.equal((await date(third)).round, null)
+  assert.equal((await post('date', { action: 'vote', roundId: a.id, slot: 0, liked: true }, third)).status, 409)
+  assert.equal((await post('date', { action: 'start' }, second).then(response => response.json())).round.id, a.id)
+  const vote = async (account, round, liked) => {
+    const response = await post('date', { action: 'vote', roundId: round.id, slot: round.voted, liked }, account)
+    assert.equal(response.status, 200)
+    return (await response.json()).round
+  }
+  const cards = []
+  const firstVote = a
+  while (a.next) {
+    cards.push(a.next)
+    a = await vote(first, a, a.voted < 3)
+  }
+  assert.equal((await vote(first, firstVote, false)).voted, cards.length)
+  assert.equal(a.complete, false)
+  assert.ok(!Object.hasOwn(a, 'matches'))
+  const combinedLists = [...(await read(first)).titles, ...(await read(second)).titles]
+  assert.ok(cards.some(card => combinedLists.some(title => title.id === card.id && title.status === 'reserve')))
+  assert.ok(cards.some(card => combinedLists.some(title => title.id === card.id && title.status === 'watching')))
+  assert.ok(cards.some(card => !combinedLists.some(title => title.id === card.id && title.status !== 'open')))
+  assert.ok(cards.every(card => !Object.hasOwn(card, 'status') && !Object.hasOwn(card, 'category')))
+  assert.ok(!cards.some(card => card.tmdb === 'movie:51' || ['Riverdale','Ein eigener Film'].includes(card.title)))
+  while (b.next) {
+    assert.deepEqual(b.next, cards[b.voted])
+    b = await vote(second, b, b.voted === 0 || b.voted === 2 || b.voted === 4)
+  }
+  assert.equal(b.complete, true)
+  assert.deepEqual(b.matches, [cards[0], cards[2]])
+  assert.deepEqual((await date(first)).round.matches, b.matches)
   assert.equal((await post('household', { action: 'leave' }, second)).status, 200)
   assert.deepEqual((await household(first)).recommendations, [])
   assert.deepEqual((await household(second)).recommendations, [])

@@ -43,6 +43,21 @@ db.exec(`
     household_id INTEGER NOT NULL REFERENCES households(id) ON DELETE CASCADE,
     email TEXT NOT NULL, expires INTEGER NOT NULL, UNIQUE (household_id, email)
   );
+  CREATE TABLE IF NOT EXISTS date_rounds (
+    id INTEGER PRIMARY KEY,
+    household_id INTEGER NOT NULL REFERENCES households(id) ON DELETE CASCADE,
+    first_user INTEGER NOT NULL REFERENCES users(id),
+    second_user INTEGER NOT NULL REFERENCES users(id),
+    deck TEXT NOT NULL,
+    CHECK (first_user < second_user)
+  );
+  CREATE TABLE IF NOT EXISTS date_votes (
+    round_id INTEGER NOT NULL REFERENCES date_rounds(id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL REFERENCES users(id),
+    slot INTEGER NOT NULL,
+    liked INTEGER NOT NULL CHECK (liked IN (0,1)),
+    PRIMARY KEY (round_id, user_id, slot)
+  );
 `)
 const monthFormatter = new Intl.DateTimeFormat('de-DE', { timeZone: 'Europe/Berlin', month: 'numeric' })
 const day = 86_400_000
@@ -318,6 +333,143 @@ function householdRecommendations(lists) {
       return { id, tmdb, title, type, genres, poster, description, extent, year, provider, verifiedProvider }
     })
 }
+const dateSlots = 12
+function dateDeck(lists, previousDeck) {
+  const candidates = new Map()
+  const blocked = new Set()
+  const profiles = lists.map(list => {
+    const weights = genreWeights(list)
+    for (const [id, record] of Object.entries(list.entries)) {
+      const title = catalog.get(id) || list.custom[id]
+      if (!title) continue
+      const entry = { ...title, ...list.media?.[id] }
+      const keys = recommendationKeys(entry)
+      if (['seen','excluded'].includes(record.status)) {
+        for (const key of keys) blocked.add(key)
+      } else if (['reserve','watching','open'].includes(record.status) &&
+          (record.status !== 'open' || (!entry.predecessor && !['marvel','seasonal'].includes(entry.pool)))) {
+        const key = keys[0]
+        const category = record.status === 'open' ? 'new' : record.status
+        const prior = candidates.get(key)
+        if (!prior || category === 'reserve' || prior.category === 'new') candidates.set(key, { entry, category })
+      }
+    }
+    return weights
+  })
+  for (const entry of catalog.values()) {
+    if (entry.pool === 'discovery' && !entry.predecessor && !candidates.has(recommendationKeys(entry)[0])) {
+      candidates.set(recommendationKeys(entry)[0], { entry, category: 'new' })
+    }
+  }
+  const groups = { reserve: [], watching: [], new: [] }
+  const seen = new Set()
+  const order = { reserve: 0, watching: 1, new: 2 }
+  for (const { entry, category } of [...candidates.values()].sort((a,b) => order[a.category] - order[b.category])) {
+    const keys = recommendationKeys(entry)
+    if (keys.some(key => blocked.has(key) || seen.has(key))) continue
+    for (const key of keys) seen.add(key)
+    const { id, tmdb, title, type, genres, poster, description, extent, year, provider, verifiedProvider } = entry
+    const score = profiles.reduce((total, weights) =>
+      total + genres.reduce((sum, genre) => sum + (weights.get(genre) || 0), 0) / Math.max(1, genres.length), 0)
+    groups[category].push({ entry: { id, tmdb, title, type, genres, poster, description, extent, year, provider, verifiedProvider }, score })
+  }
+  const previousKeys = new Set(previousDeck.flatMap(recommendationKeys))
+  const wasShown = pick => recommendationKeys(pick.entry).some(key => previousKeys.has(key))
+  for (const picks of Object.values(groups)) picks.sort((a,b) =>
+    Number(wasShown(a)) - Number(wasShown(b)) || b.score - a.score || a.entry.title.localeCompare(b.entry.title, 'de'))
+  const deck = []
+  while (deck.length < dateSlots) {
+    const group = ['reserve','watching','new'][deck.length % 3]
+    const candidate = groups[group].shift() || groups.new.shift() || groups.reserve.shift() || groups.watching.shift()
+    if (!candidate) break
+    deck.push(candidate.entry)
+  }
+  return deck
+}
+function dateMembers(householdId) {
+  return db.prepare(`SELECT users.id, email, list FROM users JOIN household_members ON users.id = user_id
+    WHERE household_id = ? ORDER BY users.id`).all(householdId)
+}
+function dateRound(householdId, userId) {
+  return db.prepare(`SELECT rounds.* FROM date_rounds AS rounds
+    JOIN household_members first_member ON first_member.user_id = first_user AND first_member.household_id = rounds.household_id
+    JOIN household_members second_member ON second_member.user_id = second_user AND second_member.household_id = rounds.household_id
+    WHERE rounds.household_id = ? AND ? IN (first_user, second_user)
+    ORDER BY rounds.id DESC LIMIT 1`).get(householdId, userId)
+}
+function dateProgress(round, userId) {
+  const deck = JSON.parse(round.deck)
+  const votes = db.prepare('SELECT user_id, slot, liked FROM date_votes WHERE round_id = ? ORDER BY slot').all(round.id)
+  const own = votes.filter(vote => vote.user_id === userId)
+  const other = votes.filter(vote => vote.user_id !== userId)
+  const complete = own.length === deck.length && other.length === deck.length
+  return { deck, own, other, complete }
+}
+function dateView(user) {
+  const household = membership(user.id)
+  if (!household) return { partners: [], round: null }
+  const members = dateMembers(household.id)
+  const partners = members.filter(member => member.id !== user.id).map(member => member.email)
+  const round = dateRound(household.id, user.id)
+  if (!round) return { partners, round: null }
+  const { deck, own, other, complete } = dateProgress(round, user.id)
+  const partnerId = round.first_user === user.id ? round.second_user : round.first_user
+  return { partners, round: {
+    id: round.id,
+    partner: members.find(member => member.id === partnerId).email,
+    total: deck.length,
+    voted: own.length,
+    complete,
+    next: deck[own.length] || null,
+    ...(complete ? { matches: own.filter(vote => vote.liked && other.some(choice => choice.slot === vote.slot && choice.liked))
+      .map(vote => deck[vote.slot]) } : {}),
+  } }
+}
+function updateDate(user, input) {
+  const household = membership(user.id)
+  if (!household) throw fail(409, 'Du brauchst einen Haushalt für ein Date.')
+  db.exec('BEGIN IMMEDIATE')
+  try {
+    const round = dateRound(household.id, user.id)
+    if (input.action === 'start') {
+      const members = dateMembers(household.id)
+      const partners = members.filter(member => member.id !== user.id)
+      const partner = partners.length === 1 ? partners[0] : partners.find(member => member.email === input.partner)
+      if (!partner) throw fail(400, 'Wähle eine Person aus deinem Haushalt.')
+      for (const member of [user, partner]) {
+        const active = dateRound(household.id, member.id)
+        if (active && !dateProgress(active, member.id).complete) {
+          if (round?.id === active.id && [active.first_user, active.second_user].includes(partner.id)) {
+            db.exec('COMMIT')
+            return dateView(user)
+          }
+          throw fail(409, 'Eine Person hat noch eine offene Date-Runde.')
+        }
+      }
+      const [first, second] = [user.id, partner.id].sort((a,b) => a - b)
+      const previous = db.prepare(`SELECT deck FROM date_rounds WHERE household_id = ? AND first_user = ? AND second_user = ?
+        ORDER BY id DESC LIMIT 1`).get(household.id, first, second)
+      const deck = dateDeck([JSON.parse(user.list), JSON.parse(partner.list)], previous ? JSON.parse(previous.deck) : [])
+      if (!deck.length) throw fail(409, 'Es sind keine passenden Titel für ein Date verfügbar.')
+      db.prepare('INSERT INTO date_rounds (household_id, first_user, second_user, deck) VALUES (?, ?, ?, ?)')
+        .run(household.id, first, second, JSON.stringify(deck))
+    } else if (input.action === 'vote') {
+      if (!round || round.id !== input.roundId) throw fail(404, 'Date-Runde nicht gefunden.')
+      const { deck, own } = dateProgress(round, user.id)
+      if (typeof input.liked !== 'boolean' || !Number.isSafeInteger(input.slot) || input.slot < 0 || input.slot >= deck.length) {
+        throw fail(400, 'Ungültige Stimme.')
+      }
+      if (input.slot > own.length) throw fail(409, 'Deine Karten wurden inzwischen aktualisiert.')
+      if (input.slot === own.length) db.prepare('INSERT INTO date_votes VALUES (?, ?, ?, ?)')
+        .run(round.id, user.id, input.slot, Number(input.liked))
+    } else throw fail(400, 'Unbekannte Date-Aktion.')
+    db.exec('COMMIT')
+  } catch (error) {
+    db.exec('ROLLBACK')
+    throw error
+  }
+  return dateView(user)
+}
 function householdView(user) {
   const household = membership(user.id)
   if (!household) {
@@ -572,9 +724,10 @@ async function mediaDetails(id) {
   return value
 }
 function lookupStatus(list, media) {
-  const previous = list.entries[mediaKey(list, media)]
+  const id = mediaKey(list, media)
+  const previous = list.entries[id]
   if (previous?.status === 'open' && previous.fromReserve) return { ...media, status: 'reserve', watchedSeasons: previous.watchedSeasons || [] }
-  return { ...media, status: ['removed','rotated'].includes(previous?.status) ? '' : previous?.status || '', watchedSeasons: previous?.watchedSeasons || [] }
+  return { ...media, libraryId: previous ? id : undefined, status: ['removed','rotated'].includes(previous?.status) ? '' : previous?.status || '', watchedSeasons: previous?.watchedSeasons || [] }
 }
 async function lookupTitles(list, query, page) {
   const normalized = query.replace(/[^\p{L}\p{N}]/gu, '').toLowerCase()
@@ -827,6 +980,11 @@ createServer(async (req, res) => {
       }
       return json(res, view(list, user))
     }
+    if (req.method === 'GET' && path === '/api/date') {
+      const user = getUser(req)
+      if (!user) throw fail(401, 'Bitte melde dich an.')
+      return json(res, dateView(user))
+    }
     if (req.method === 'GET' && path === '/api/household') {
       const user = getUser(req)
       if (!user) throw fail(401, 'Bitte melde dich an.')
@@ -957,6 +1115,11 @@ createServer(async (req, res) => {
       if (id) db.prepare('DELETE FROM sessions WHERE hash = ?').run(hash(id))
       res.setHeader('Set-Cookie', sessionCookie('', 0))
       return json(res, { ok: true })
+    }
+    if (path === '/api/date') {
+      const user = getUser(req)
+      if (!user) throw fail(401, 'Bitte melde dich an.')
+      return json(res, updateDate(user, input))
     }
     if (path === '/api/household') {
       const user = getUser(req)
