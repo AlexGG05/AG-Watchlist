@@ -203,7 +203,7 @@ async function update(input) {
   $('modal').close()
   render()
   toast(state.data.searchWarning || (state.data.promoted.length && input.action !== 'preferences'
-    ? `Nachgerückt: ${state.data.promoted.join(', ')}` : 'Gespeichert.'))
+    ? `Nachgerückt: ${state.data.promoted.join(', ')}` : input.action === 'remove' ? 'Titel entfernt.' : 'Gespeichert.'))
 }
 function ratingFields(entry) {
   const group = make('fieldset', 'rating-choices')
@@ -307,6 +307,9 @@ async function titleDialog(entry, repeat = false, shared = false) {
         update({ id: entry.id, action: 'seen', rating: textOf('rating') })))
       if (!['seen','watching'].includes(entry.status)) actions.push(submit('Am schauen', () => update({ id: entry.id, action: 'watching' }), 'button'))
       if (entry.pool === 'seasonal' && !entry.status) actions.push(submit('Auf die Merkliste', () => update({ id: entry.id, action: 'reserve' }), 'button'))
+      if (['watching', 'reserve'].includes(entry.status)) actions.push(submit(
+        entry.status === 'watching' ? 'Aus „Am schauen“ entfernen' : 'Aus Merkliste entfernen',
+        () => update({ id: entry.id, action: 'remove' }), 'button'))
       if (entry.status !== 'seen') actions.push(button('Nicht ansehbar …', () => dialog(entry.title,
         [make('p', '', 'Diesen Titel dauerhaft ausschließen?')], [
           submit('Dauerhaft ausschließen', () => update({ id: entry.id, action: 'excluded' })),

@@ -149,7 +149,7 @@ function fill(list) {
     })
     const next = candidates.find(match) || candidates[0]
     if (!next) break
-    entries[next.id] = { status: 'open', rating: '', suggested: entries[next.id]?.status !== 'reserve' }
+    entries[next.id] = { ...entries[next.id], status: 'open', rating: '', suggested: entries[next.id]?.status !== 'reserve' }
     active.push(next.id)
     changed.push(next)
   }
@@ -161,7 +161,7 @@ function view(list, user) {
   const today = Date.now()
   const available = id => catalog.get(id) || custom[id]
   const titles = Object.entries(entries)
-    .filter(([id, record]) => id !== nextMarvel && available(id) && (record.status !== 'reserve' || eligible(available(id), entries)))
+    .filter(([id, record]) => id !== nextMarvel && record.status !== 'removed' && available(id) && (record.status !== 'reserve' || eligible(available(id), entries)))
     .map(([id, record]) => ({ ...available(id), ...list.media?.[id], ...record }))
   const current = nextMarvel ? { ...catalog.get(nextMarvel), ...list.media?.[nextMarvel], status: 'open', ...entries[nextMarvel] } : null
   const seasonal = monthFormatter.format(today) === '12'
@@ -404,7 +404,7 @@ async function mediaDetails(id) {
 }
 function lookupStatus(list, media) {
   const previous = list.entries[mediaKey(list, media)]
-  return { ...media, status: previous?.status || '', watchedSeasons: previous?.watchedSeasons || [] }
+  return { ...media, status: previous?.status === 'removed' ? '' : previous?.status || '', watchedSeasons: previous?.watchedSeasons || [] }
 }
 async function lookupTitles(list, query, page) {
   const normalized = query.replace(/[^\p{L}\p{N}]/gu, '').toLowerCase()
@@ -433,7 +433,7 @@ function storeSelection(list, selected, remember) {
         (existingTitle && !eligible(existingTitle, list.entries))) {
       throw fail(409, `Bei „${media.title}“ ist zuerst ein früherer Teil an der Reihe.`)
     }
-    if (remember && (previous || marvelOrder.includes(id))) throw fail(409, `„${media.title}“ steht bereits in deiner Watchlist.`)
+    if (remember && ((previous && previous.status !== 'removed') || marvelOrder.includes(id))) throw fail(409, `„${media.title}“ steht bereits in deiner Watchlist.`)
     const published = media.seasons.map(season => season.number)
     const requested = watched || []
     if (!remember && media.type === 'serie' && (!published.length ||
@@ -530,6 +530,10 @@ function mutate(list, input) {
         (input.genre && !genres.includes(input.genre))) throw fail(400, 'Bitte prüfe Titel, Art und Genre.')
     const key = slug(title)
     if (!key) throw fail(400, 'Bitte gib einen gültigen Titel ein.')
+    if (action === 'add' && Object.hasOwn(entries, key) && entries[key].status === 'removed') {
+      entries[key].status = 'reserve'
+      return fill(list)
+    }
     if (Object.hasOwn(entries, key) || marvelOrder.includes(key)) {
       if (action === 'log') return mutate(list, { action: 'seen', id: key, rating })
       throw fail(409, 'Dieser Titel ist bereits erfasst.')
@@ -566,6 +570,14 @@ function mutate(list, input) {
   if (action === 'rewatch' && list.rewatch[id]?.offeredAt && existing?.status === 'seen') {
     list.rewatch[id].acknowledgedAt = list.rewatch[id].offeredAt
     return []
+  }
+  if (action === 'remove') {
+    if (existing?.status === 'removed') return []
+    if (!['watching', 'reserve'].includes(existing?.status)) {
+      throw fail(409, 'Nur Titel aus „Am schauen“ oder der Merkliste können entfernt werden.')
+    }
+    entries[id] = { ...existing, status: id === next ? 'open' : 'removed' }
+    return fill(list)
   }
   if (existing?.status === 'excluded') throw fail(409, 'Dieser Titel ist dauerhaft ausgeschlossen.')
   if (existing?.status === 'seen' && action !== 'seen') throw fail(409, 'Dieser Titel bleibt im Archiv.')

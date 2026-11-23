@@ -223,4 +223,29 @@ test('separate verified accounts retain their watchlists and recommendation rule
   assert.equal(replenished.status, 200)
   assert.deepEqual((await replenished.json()).promoted, ['Neues Weltall'])
 
+  const reserveMovie = (await read(first)).titles.find(title => title.tmdb === 'movie:51')
+  const remove = (account, id) => post('list', { action: 'remove', id }, account)
+  const removedReserve = await remove(first, reserveMovie.id)
+  assert.equal(removedReserve.status, 200)
+  assert.ok(!(await removedReserve.json()).titles.some(title => title.id === reserveMovie.id))
+  const readded = await post('list', { action: 'remember-selection', items: [{ tmdb: 'movie:51', watched: [] }] }, first)
+  assert.equal(readded.status, 200)
+  assert.equal((await readded.json()).titles.find(title => title.id === reserveMovie.id).status, 'reserve')
+  assert.equal((await remove(second, reserveMovie.id)).status, 409)
+
+  const partial = await post('list', { action: 'log-selection', items: [{ tmdb: 'tv:52', watched: [2] }] }, third)
+  assert.equal(partial.status, 200)
+  const partialSeries = (await partial.json()).titles.find(title => title.tmdb === 'tv:52')
+  assert.equal((await remove(third, partialSeries.id)).status, 200)
+  assert.ok(!(await read(third)).titles.some(title => title.id === partialSeries.id))
+  const resume = await post('list', { action: 'remember-selection', items: [{ tmdb: 'tv:52', watched: [] }] }, third)
+  assert.equal(resume.status, 200)
+  assert.deepEqual((await resume.json()).titles.find(title => title.id === partialSeries.id).watchedSeasons, [2])
+
+  assert.equal((await post('list', { action: 'watching', id: firstMarvel }, third)).status, 200)
+  assert.equal((await remove(third, firstMarvel)).status, 200)
+  const marvelAfterRemove = (await read(third)).marvel
+  assert.equal(marvelAfterRemove.id, firstMarvel)
+  assert.equal(marvelAfterRemove.status, 'open')
+
 })
