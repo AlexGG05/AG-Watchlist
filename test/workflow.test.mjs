@@ -18,7 +18,14 @@ test('separate verified accounts retain their watchlists and recommendation rule
   const origin = `http://127.0.0.1:${port}`
   const fixture = join(dir, 'tmdb.mjs')
   await writeFile(fixture, `
-    globalThis.fetch = async url => {
+    globalThis.fetch = async (value, options) => {
+      const url = new URL(value)
+      if (url.hostname === 'streaming-availability.p.rapidapi.com' && url.pathname === '/shows/tt1234567') {
+        if (options.headers['X-RapidAPI-Key'] !== 'fixture-pricing') throw new Error('Unexpected pricing request')
+        return Response.json({ streamingOptions: { de: [
+          { type: 'rent', service: { id: 'prime' }, price: { currency: 'EUR', amount: '3.99' }, quality: 'hd', link: 'https://www.amazon.de/test' },
+        ] } })
+      }
       if (url.hostname !== 'api.themoviedb.org' || url.searchParams.get('api_key') !== 'local-fixture') {
         throw new Error('Unexpected request')
       }
@@ -32,7 +39,17 @@ test('separate verified accounts retain their watchlists and recommendation rule
       })
       if (url.pathname === '/3/movie/51') return Response.json({
         id: 51, title: 'Star Wars: Testfilm', overview: 'Eine Filmhandlung.', poster_path: '/movie.jpg',
-        genres: [{ id: 878, name: 'Science Fiction' }, { id: 12, name: 'Abenteuer' }],
+        genres: [{ id: 878, name: 'Science Fiction' }, { id: 12, name: 'Abenteuer' }], imdb_id: 'tt1234567',
+        'watch/providers': { results: { DE: {
+          link: 'https://www.themoviedb.org/movie/51/watch?locale=DE',
+          flatrate: [
+            { provider_id: 119, provider_name: 'Amazon Prime Video' },
+            { provider_id: 999, provider_name: 'MGM Amazon Channel' },
+            { provider_id: 337, provider_name: 'Disney Plus' },
+          ],
+          rent: [{ provider_id: 10, provider_name: 'Amazon Video' }],
+          buy: [{ provider_id: 10, provider_name: 'Amazon Video' }],
+        } } },
       })
       if (url.pathname === '/3/tv/52') return Response.json({
         id: 52, name: 'Star Wars: Testserie', overview: 'Eine Serienhandlung.', poster_path: '/series.jpg',
@@ -56,7 +73,7 @@ test('separate verified accounts retain their watchlists and recommendation rule
   `)
   const server = spawn(process.execPath, ['--import', fixture, 'server.mjs'], {
     env: { ...process.env, NODE_ENV: 'test', PORT: port, DATA_DIR: dir, APP_URL: origin,
-      SMTP_URL: '', TMDB_API_KEY: 'local-fixture', TMDB_READ_TOKEN: '' },
+      SMTP_URL: '', TMDB_API_KEY: 'local-fixture', TMDB_READ_TOKEN: '', STREAMING_AVAILABILITY_API_KEY: 'fixture-pricing' },
   })
   t.after(async () => {
     if (server.exitCode === null) {
@@ -159,6 +176,12 @@ test('separate verified accounts retain their watchlists and recommendation rule
   assert.equal(rememberedFilm.type, 'film')
   assert.deepEqual(rememberedFilm.genres, ['Sci-Fi', 'Abenteuer'])
   assert.equal(rememberedFilm.poster, '/movie.jpg')
+  const streaming = (await (await media('details?id=movie%3A51', second)).json()).offers
+  assert.ok(streaming.some(offer => offer.service === 'Amazon Prime Video' && offer.type === 'subscription'))
+  assert.ok(streaming.some(offer => offer.channel === 'MGM' && offer.type === 'addon'))
+  assert.ok(streaming.some(offer => offer.service === 'Disney+' && offer.type === 'subscription'))
+  assert.match(streaming.find(offer => offer.type === 'rent').price, /^3,99\s€$/)
+  assert.equal(streaming.find(offer => offer.type === 'buy').price, undefined)
   const series = async () => (await media('details?id=tv%3A52', second)).json()
   assert.deepEqual((await series()).seasons.map(season => season.number), [1, 2])
 
@@ -247,5 +270,22 @@ test('separate verified accounts retain their watchlists and recommendation rule
   const marvelAfterRemove = (await read(third)).marvel
   assert.equal(marvelAfterRemove.id, firstMarvel)
   assert.equal(marvelAfterRemove.status, 'open')
+
+  const original = await read(first)
+  const originalOpen = new Set(original.titles.filter(title => title.status === 'open').map(title => title.id))
+  const refreshed = await post('list', { action: 'refresh-recommendations' }, first)
+  assert.equal(refreshed.status, 200)
+  const nextList = await refreshed.json()
+  const nextOpen = nextList.titles.filter(title => title.status === 'open')
+  assert.equal(nextOpen.length, 15)
+  assert.ok(nextOpen.some(title => title.type === 'film'))
+  assert.ok(nextOpen.some(title => !originalOpen.has(title.id)))
+  assert.equal(nextList.marvel.id, original.marvel.id)
+  assert.deepEqual(nextList.titles.filter(title => ['seen','excluded','reserve','watching'].includes(title.status)),
+    original.titles.filter(title => ['seen','excluded','reserve','watching'].includes(title.status)))
+  const nextRefresh = await post('list', { action: 'refresh-recommendations' }, first)
+  assert.equal(nextRefresh.status, 200)
+  assert.notDeepEqual((await nextRefresh.json()).titles.filter(title => title.status === 'open').map(title => title.id),
+    nextOpen.map(title => title.id))
 
 })

@@ -7,6 +7,7 @@ services:
     environment:
       APP_URL: ${APP_URL:?Öffentliche HTTPS-Adresse setzen}
       SMTP_URL: ${SMTP_URL:?SMTP-Verbindungs-URL setzen}
+      STREAMING_AVAILABILITY_API_KEY: ${STREAMING_AVAILABILITY_API_KEY:-}
       TMDB_API_KEY: ${TMDB_API_KEY:-}
       MAIL_FROM: ${MAIL_FROM:?Absender setzen}
     volumes:

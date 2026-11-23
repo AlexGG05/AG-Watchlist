@@ -27,8 +27,8 @@
       <button data-tab="excluded"><span>⊘</span> Ausgeschlossen</button>
       <span class="nav-label nav-special">GEMEINSAM</span>
       <button data-tab="household"><span>⌂</span> Haushalt</button>
-      <span class="nav-label nav-special">SPECIALS</span>
-      <button data-tab="marvel"><span>✦</span> Marvel</button>
+      <span class="nav-label nav-special">ENTDECKEN</span>
+      <button data-tab="universes"><span>✦</span> Universen</button>
       <button data-tab="extras" id="extras-tab" hidden><span>♡</span> Extras</button>
     </nav>
     <div class="sidebar-bottom"><span class="brand-icon small">AG</span><div><strong>AG Watchlist</strong><small>Persönliche Mediathek</small></div></div>
@@ -46,8 +46,9 @@
         <div class="stats"><div><strong id="open-count">15</strong><span>Offen</span></div><div><strong id="watch-count">3</strong><span>Am schauen</span></div><div><strong id="seen-count">0</strong><span>Gesehen</span></div></div>
       </section>
       <section class="household-page" id="household-page" aria-labelledby="household-heading" hidden></section>
+      <section class="universe-page" id="universe-page" aria-labelledby="universe-heading" hidden></section>
       <section class="collection" id="personal-collection" aria-labelledby="heading">
-        <div class="section-head"><div><h2 id="heading">Offene Empfehlungen</h2><p id="section-note"></p></div></div>
+        <div class="section-head"><div><h2 id="heading">Offene Empfehlungen</h2><p id="section-note"></p></div><button class="button" id="refresh-recommendations" hidden>↻ Neue Vorschläge</button></div>
         <div class="filters">
           <div class="segmented" aria-label="Titelart">
             <button data-type="all" class="selected">Alle</button><button data-type="serie">Serien</button><button data-type="film">Filme</button>

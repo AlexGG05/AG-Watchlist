@@ -5,12 +5,24 @@ const headings = {
   seen: ['Gesehenes Archiv', 'Gesehen', 'Deine abgeschlossenen Titel und Bewertungen.'],
   reserve: ['Merkliste', 'Merkliste', 'Diese Titel können als Nächstes nachrücken.'],
   excluded: ['Dauerhaft ausgeschlossen', 'Ausgeschlossen', 'Diese Titel werden dir nicht wieder vorgeschlagen.'],
-  marvel: ['Marvel-Reihenfolge', 'Marvel', 'Dein nächster Titel in der zeitlichen Reihenfolge der Handlung.'],
+  universes: ['Universen', 'Universen', ''],
   extras: ['Extras', 'Extras', 'Saisonale Empfehlungen und Favoriten zum Wiedersehen.'],
 }
 const ratingClasses = { Schlecht: 'bad', Okay: 'ok', Gut: 'good', 'Sehr gut': 'great', Lieblingsserie: 'series', Lieblingsfilm: 'movie', 'Nicht ansehbar': 'excluded' }
 const stillTitles = ['Chilling Adventures of Sabrina', 'Lockwood & Co.', 'Lucifer', 'Dark', 'The Umbrella Academy', 'Once Upon a Time – Es war einmal …']
-const state = { tab: 'open', type: 'all', data: null }
+const universeOptions = [
+  ['Marvel (MCU)', ''],
+  ['Star Wars', 'Star Wars'],
+  ['Disney · Die Eiskönigin', 'Die Eiskönigin'],
+  ['Disney · Fluch der Karibik', 'Pirates of the Caribbean'],
+  ['Pixar · Toy Story', 'Toy Story'],
+  ['Wizarding World', 'Harry Potter'],
+  ['Mittelerde', 'Der Herr der Ringe'],
+  ['Jurassic Park / World', 'Jurassic'],
+  ['DC · Batman', 'Batman'],
+]
+const state = { tab: 'open', type: 'all', universe: 0, data: null }
+
 let toastTimer
 function make(tag, className, content) {
   const element = document.createElement(tag)
@@ -78,8 +90,11 @@ function render() {
   const data = state.data
   if (!data) return
   const shared = state.tab === 'household'
-  $('hero').hidden = shared
-  $('personal-collection').hidden = shared
+  const universes = state.tab === 'universes'
+  $('hero').hidden = shared || universes
+  $('personal-collection').hidden = shared || universes
+  $('universe-page').hidden = !universes
+  $('refresh-recommendations').hidden = state.tab !== 'open'
   $('household-page').hidden = !shared
   const { titles, marvel, seasonal, favorites } = data
   const openCount = titles.filter(entry => entry.status === 'open').length
@@ -101,13 +116,13 @@ function render() {
     else nav.removeAttribute('aria-current')
   }
   if (shared) return
+  if (universes) return renderUniverse()
   for (const type of document.querySelectorAll('[data-type]')) {
     type.classList.toggle('selected', type.dataset.type === state.type)
     type.setAttribute('aria-pressed', String(type.dataset.type === state.type))
   }
   let shown
-  if (state.tab === 'marvel') shown = marvel ? [marvel] : []
-  else if (state.tab === 'extras') shown = [...seasonal, ...favorites]
+  if (state.tab === 'extras') shown = [...seasonal, ...favorites]
   else {
     shown = titles.filter(entry => entry.status === state.tab)
     if (state.tab === 'watching' && marvel?.status === 'watching') shown.push(marvel)
@@ -194,6 +209,8 @@ function account() {
     $('cards').replaceChildren()
     $('marvel-preview').replaceChildren()
     $('household-page').replaceChildren()
+    $('universe-page').replaceChildren()
+    state.universe = 0
     $('modal').close()
     auth()
   })])
@@ -249,6 +266,42 @@ function seasonFields(entry, checked) {
   }
   return group
 }
+function streamingPanel(entry) {
+  const section = make('section', 'streaming-offers')
+  section.append(make('h3', '', 'Streaming in Deutschland'))
+  const offers = entry.offers || []
+  if (!offers.length) {
+    section.append(make('p', 'meta', entry.offers
+      ? 'Keine Angebote bei Netflix, Disney+ oder Amazon gefunden.'
+      : 'Verfügbarkeit noch nicht geprüft.'))
+    return section
+  }
+  const list = make('ul', 'offer-list')
+  for (const offer of offers) {
+    const label = {
+      subscription: offer.service === 'Amazon Prime Video' ? 'Im Prime-Abo enthalten' : 'Im Abo enthalten',
+      addon: `Zusatzabo${offer.channel ? ' · ' + offer.channel : ''}`,
+      rent: 'Leihen', buy: 'Kaufen',
+    }[offer.type]
+    const row = make('li')
+    row.append(make('strong', '', offer.service))
+    const price = offer.price || (['rent','buy','addon'].includes(offer.type) ? 'Preis beim Anbieter prüfen' : '')
+    row.append(make('span', 'meta', [label, offer.quality, price].filter(Boolean).join(' · ')))
+    if (offer.link && offer.link !== entry.availabilityLink) {
+      const link = make('a', 'meta', 'Zum Angebot')
+      Object.assign(link, { href: offer.link, target: '_blank', rel: 'noopener noreferrer' })
+      row.append(link)
+    }
+    list.append(row)
+  }
+  section.append(list)
+  if (entry.availabilityLink) {
+    const link = make('a', 'meta', 'Angebote bei JustWatch / TMDB prüfen')
+    Object.assign(link, { href: entry.availabilityLink, target: '_blank', rel: 'noopener noreferrer' })
+    section.append(link)
+  }
+  return section
+}
 function descriptionPanel(entry) {
   const detail = make('div', 'media-detail')
   if (entry.poster) detail.append(posterImage(entry, 'detail-poster'))
@@ -296,7 +349,8 @@ function watchArtwork(artwork, entry) {
 async function titleDialog(entry, repeat = false, shared = false) {
   const panel = descriptionPanel(entry)
   const progress = make('div')
-  const fields = [panel]
+  const streaming = streamingPanel(entry)
+  const fields = [panel, streaming]
   const actions = []
   if (!shared) {
     if (entry.status === 'excluded') {
@@ -338,6 +392,7 @@ async function titleDialog(entry, repeat = false, shared = false) {
     const details = await api(`media/details?id=${encodeURIComponent(match.tmdb)}`)
     if (!panel.isConnected || !$('modal').open) return
     panel.replaceWith(descriptionPanel({ ...entry, ...details }))
+    streaming.replaceWith(streamingPanel(details))
     status.remove()
     showSeasons(details)
   } catch {
@@ -345,7 +400,7 @@ async function titleDialog(entry, repeat = false, shared = false) {
     showSeasons(entry)
   }
 }
-function titleSearch(log) {
+function titleSearch(log, initialQuery = '') {
   if (!state.data?.user) return auth()
   const queryField = field('Film, Serie oder Reihe suchen', 'media-query', { type: 'search', placeholder: 'z. B. Star Wars', minLength: 2, maxLength: 120 })
   const query = queryField.querySelector('input')
@@ -485,6 +540,10 @@ function titleSearch(log) {
   }))
   actions.push(button('Ohne TMDB-Treffer manuell erfassen', () => addTitle(log)))
   dialog(log ? 'Gesehen eintragen' : 'Titel merken', [queryField, searchStatus, results], actions)
+  if (initialQuery && state.data.onlineSearch) {
+    query.value = initialQuery
+    search()
+  }
   query.focus()
 }
 
@@ -536,6 +595,51 @@ function preferences() {
       setTab('open')
     }),
   ])
+}
+function renderUniverse() {
+  const page = $('universe-page')
+  const heading = make('h2', '', 'Universen')
+  heading.id = 'universe-heading'
+  const selector = make('select')
+  selector.setAttribute('aria-label', 'Universum auswählen')
+  universeOptions.forEach(([name], index) => selector.add(new Option(name, index)))
+  selector.value = state.universe
+  selector.addEventListener('change', () => {
+    state.universe = Number(selector.value)
+    renderUniverse()
+    page.querySelector('select').focus()
+  })
+  page.replaceChildren(heading, selector)
+  const [name, query] = universeOptions[state.universe]
+  const results = make('div', 'cards')
+  page.append(make('h3', '', name), results)
+  if (!query) {
+    const { marvel, marvelTotal, titles } = state.data
+    const seen = titles.filter(title => title.pool === 'marvel' && title.status === 'seen').length
+    results.before(make('p', 'meta', `${seen} von ${marvelTotal} Titeln gesehen · Chronologie der Handlung`))
+    if (marvel) results.append(card(marvel))
+    else results.append(make('p', 'empty', 'Kein weiterer Marvel-Titel in der Reihenfolge.'))
+    return
+  }
+  if (!state.data.onlineSearch) {
+    results.append(make('p', 'empty', 'Für die Titelliste dieses Universums braucht die App den TMDB-Schlüssel.'))
+    return
+  }
+  const controls = make('div', 'hero-actions')
+  controls.append(button('Titel in der Reihe merken', () => titleSearch(false, query)),
+    button('Gesehen in der Reihe eintragen', () => titleSearch(true, query)))
+  results.before(controls)
+  results.append(make('p', 'empty', 'Titel werden geladen …'))
+  api(`media/search?q=${encodeURIComponent(query)}`).then(data => {
+    if (!results.isConnected) return
+    results.replaceChildren(...data.results.map(entry => card({
+      ...entry, id: entry.tmdb, genres: entry.genres || [],
+    }, false, true)))
+    if (!data.results.length) results.append(make('p', 'empty', 'Keine passenden Titel gefunden.'))
+    if (data.more) results.append(button('Weitere Titel suchen', () => titleSearch(false, query)))
+  }).catch(error => {
+    if (results.isConnected) results.replaceChildren(make('p', 'empty', error.message))
+  })
 }
 function showLibrary(data) {
   state.data = data
@@ -638,6 +742,29 @@ function setTab(tab) {
   render()
   if (tab === 'household') loadHousehold()
 }
+$('refresh-recommendations').addEventListener('click', async event => {
+  const control = event.currentTarget
+  control.disabled = true
+  control.textContent = 'Suche läuft …'
+  try {
+    const user = state.data.user.email
+    const data = await api('list', { action: 'refresh-recommendations' })
+    if (state.data?.user.email !== user) return
+    state.data = data
+    if (state.tab === 'open') {
+      state.type = 'all'
+      $('genre').value = ''
+      $('search').value = ''
+    }
+    render()
+    toast(data.notice)
+  } catch (error) {
+    toast(error.message)
+  } finally {
+    control.disabled = false
+    control.textContent = '↻ Neue Vorschläge'
+  }
+})
 $('account').addEventListener('click', account)
 $('hero-action').addEventListener('click', () => titleSearch(false))
 $('log-title').addEventListener('click', () => titleSearch(true))

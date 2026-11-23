@@ -13,6 +13,7 @@ const secure = appUrl.protocol === 'https:'
 const tmdbToken = process.env.TMDB_READ_TOKEN
 const tmdbKey = process.env.TMDB_API_KEY
 const onlineSearch = Boolean(tmdbToken || tmdbKey)
+const streamingKey = process.env.STREAMING_AVAILABILITY_API_KEY
 const smtp = process.env.SMTP_URL ? nodemailer.createTransport(process.env.SMTP_URL) : null
 if (production && (!secure || !smtp || !process.env.MAIL_FROM)) {
   throw new Error('APP_URL (HTTPS), SMTP_URL und MAIL_FROM sind erforderlich.')
@@ -127,7 +128,7 @@ function searchInterests(list) {
     .sort((a, b) => b[1] - a[1]).slice(0, 4).map(([genre]) => genre)
   return [...new Set([...(list.interests || []), ...inferred])]
 }
-function fill(list) {
+function fill(list, rotating = false, avoid = new Set()) {
   const { entries, custom } = list
   const weights = genreWeights(list)
   const score = entry => {
@@ -139,21 +140,58 @@ function fill(list) {
   const hasFilm = active.some(id => all.get(id)?.type === 'film')
   const changed = []
   while (active.length < 15) {
-    const candidates = [...all.values()].filter(entry => eligible(entry, entries) &&
-      (entries[entry.id]?.status === 'reserve' || (!entries[entry.id] && entry.pool === 'discovery')))
+    const candidates = [...all.values()].filter(entry => {
+      const status = entries[entry.id]?.status
+      return !avoid.has(entry.id) && eligible(entry, entries) &&
+        ((!rotating && status === 'reserve') || status === 'rotated' || (!status && entry.pool === 'discovery'))
+    })
     const requireFilm = !hasFilm && !changed.some(entry => entry.type === 'film')
     const match = entry => !requireFilm || entry.type === 'film'
     candidates.sort((a, b) => {
       const priority = entry => Number(entries[entry.id]?.status === 'reserve')
-      return priority(b) - priority(a) || score(b) - score(a) || Number(Boolean(b.tmdb)) - Number(Boolean(a.tmdb))
+      const recency = entry => entries[entry.id]?.rotatedAt || 0
+      return priority(b) - priority(a) || recency(a) - recency(b) || score(b) - score(a) || Number(Boolean(b.tmdb)) - Number(Boolean(a.tmdb))
     })
     const next = candidates.find(match) || candidates[0]
     if (!next) break
-    entries[next.id] = { ...entries[next.id], status: 'open', rating: '', suggested: entries[next.id]?.status !== 'reserve' }
+    entries[next.id] = { ...entries[next.id], status: 'open', rating: '', suggested: entries[next.id]?.status !== 'reserve', fromReserve: entries[next.id]?.status === 'reserve' }
     active.push(next.id)
     changed.push(next)
   }
   return changed.map(entry => entry.title)
+}
+function rotateRecommendations(list) {
+  const active = Object.entries(list.entries).filter(([id, record]) => record.status === 'open' && !marvelOrder.includes(id))
+  const available = id => catalog.get(id) || list.custom[id]
+  const films = active.filter(([id]) => available(id)?.type === 'film')
+  const swap = active.filter(([id, record]) => !record.fromReserve && !record.watchedSeasons?.length &&
+    (films.length > 1 || id !== films[0]?.[0]))
+    .sort((a, b) => (a[1].rotatedAt || 0) - (b[1].rotatedAt || 0)).slice(0, 6)
+  for (const [id, record] of swap) {
+    list.entries[id] = { ...record, status: 'rotated', rotatedAt: Date.now() }
+  }
+  const promoted = fill(list, true, new Set(swap.map(([id]) => id)))
+  const regular = Object.entries(list.entries).filter(([id, record]) => record.status === 'open' && !marvelOrder.includes(id))
+  const missingFilm = !regular.some(([id]) => available(id)?.type === 'film')
+  const restore = swap.sort((a, b) => missingFilm
+    ? Number(available(b[0])?.type === 'film') - Number(available(a[0])?.type === 'film') : 0)
+  for (let remaining = Math.max(0, active.length - regular.length); remaining > 0; remaining--) {
+    const [id, record] = restore.shift()
+    list.entries[id] = record
+  }
+  if (films.length && !Object.entries(list.entries).some(([id, record]) =>
+    record.status === 'open' && !marvelOrder.includes(id) && available(id)?.type === 'film')) {
+    const [filmId, record] = films[0]
+    const replaced = Object.entries(list.entries).find(([id, item]) =>
+      item.status === 'open' && promoted.includes(available(id)?.title) && !marvelOrder.includes(id))
+    if (replaced) {
+      const [id, item] = replaced
+      promoted.splice(promoted.indexOf(available(id).title), 1)
+      list.entries[id] = { ...item, status: 'rotated', rotatedAt: Date.now() }
+      list.entries[filmId] = record
+    }
+  }
+  return promoted
 }
 function view(list, user) {
   const { entries, custom, rewatch } = list
@@ -161,7 +199,7 @@ function view(list, user) {
   const today = Date.now()
   const available = id => catalog.get(id) || custom[id]
   const titles = Object.entries(entries)
-    .filter(([id, record]) => id !== nextMarvel && record.status !== 'removed' && available(id) && (record.status !== 'reserve' || eligible(available(id), entries)))
+    .filter(([id, record]) => id !== nextMarvel && !['removed','rotated'].includes(record.status) && available(id) && (record.status !== 'reserve' || eligible(available(id), entries)))
     .map(([id, record]) => ({ ...available(id), ...list.media?.[id], ...record }))
   const current = nextMarvel ? { ...catalog.get(nextMarvel), ...list.media?.[nextMarvel], status: 'open', ...entries[nextMarvel] } : null
   const seasonal = monthFormatter.format(today) === '12'
@@ -170,7 +208,7 @@ function view(list, user) {
     (rewatch[entry.id]?.offeredAt === rewatch[entry.id]?.acknowledgedAt
       ? today - Math.max(entry.seenAt || 0, rewatch[entry.id]?.offeredAt || 0) >= 183 * day
       : Boolean(rewatch[entry.id]?.offeredAt)))
-  return { user: user ? { email: user.email } : null, titles, marvel: current, seasonal, favorites, genres, ratings, interests: list.interests || [], onlineSearch }
+  return { user: user ? { email: user.email } : null, titles, marvel: current, marvelTotal: marvelOrder.length, seasonal, favorites, genres, ratings, interests: list.interests || [], onlineSearch }
 }
 function save(user, list) {
   db.prepare('UPDATE users SET list = ? WHERE id = ?').run(JSON.stringify(list), user.id)
@@ -383,13 +421,66 @@ function mediaKey(list, media) {
   if (preferred && !catalog.has(preferred) && !Object.hasOwn(list.custom, preferred) && !Object.hasOwn(list.entries, preferred)) return preferred
   return `tmdb-${media.tmdb.replace(':', '-')}`
 }
+function safeOfferLink(value) {
+  try {
+    const url = new URL(value)
+    return url.protocol === 'https:' && !url.username && !url.password ? url.href : ''
+  } catch { return '' }
+}
+function germanOffers(region) {
+  if (!region) return []
+  const link = safeOfferLink(region.link)
+  return ['flatrate', 'rent', 'buy'].flatMap(kind => (region[kind] || []).flatMap(provider => {
+    const name = provider.provider_name || ''
+    const prime = [9, 119, 2100].includes(provider.provider_id) || /^Amazon Prime Video\b/i.test(name)
+    const channel = /Amazon Channel/i.test(name)
+    const amazonStore = provider.provider_id === 10 || /^Amazon Video$/i.test(name)
+    const netflix = provider.provider_id === 8 || /^Netflix\b/i.test(name)
+    const disney = provider.provider_id === 337 || /^Disney(?:\+| Plus)/i.test(name)
+    if (kind === 'flatrate' && amazonStore && !prime) return []
+    if (!netflix && !disney && !prime && !channel && !amazonStore) return []
+    const type = kind !== 'flatrate' ? kind : channel ? 'addon' : 'subscription'
+    const service = prime || channel || amazonStore ? 'Amazon Prime Video' : netflix ? 'Netflix' : 'Disney+'
+    return [{ service, type, channel: channel ? name.replace(/ Amazon Channel.*/i, '') : '', link }]
+  })).filter((offer, index, all) => all.findIndex(other =>
+    other.service === offer.service && other.type === offer.type && other.channel === offer.channel) === index)
+}
+const priceCache = new Map()
+async function streamingOffers(details) {
+  if (!streamingKey || !/^tt\d+$/.test(details.imdb || '')) return details.offers
+  const cached = priceCache.get(details.imdb)
+  if (cached && cached.expires > Date.now()) return cached.offers
+  const host = 'streaming-availability.p.rapidapi.com'
+  try {
+    const response = await fetch(`https://${host}/shows/${details.imdb}?country=de`, {
+      headers: { 'X-RapidAPI-Key': streamingKey, 'X-RapidAPI-Host': host }, signal: AbortSignal.timeout(2500),
+    })
+    if (!response.ok) return details.offers
+    const data = await response.json()
+    const services = { prime: 'Amazon Prime Video', netflix: 'Netflix', disney: 'Disney+' }
+    const priced = (data.streamingOptions?.de || []).flatMap(option => {
+      const service = services[option.service?.id]
+      if (!service || !['subscription', 'addon', 'rent', 'buy'].includes(option.type)) return []
+      const amount = option.price?.amount
+      const price = option.price?.currency === 'EUR' && amount !== undefined && /^\d+(\.\d{1,2})?$/.test(String(amount))
+        ? new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EUR' }).format(Number(amount)) : ''
+      return [{ service, type: option.type, channel: option.addon?.name || '', price,
+        quality: typeof option.quality === 'string' ? option.quality.toUpperCase() : '', link: safeOfferLink(option.link) }]
+    })
+    const combined = [...priced, ...details.offers.filter(offer => !priced.some(other =>
+      other.service === offer.service && other.type === offer.type && (!offer.channel || offer.channel === other.channel)))]
+    if (priceCache.size >= 250) priceCache.delete(priceCache.keys().next().value)
+    priceCache.set(details.imdb, { offers: combined, expires: Date.now() + 15 * 60_000 })
+    return combined
+  } catch { return details.offers }
+}
 const detailsCache = new Map()
 async function mediaDetails(id) {
   if (typeof id !== 'string' || !/^(movie|tv):[1-9]\d{0,9}$/.test(id)) throw fail(400, 'Ungültiger Titel.')
   const stored = detailsCache.get(id)
   if (stored && stored.expires > Date.now()) return stored.value
   const [type, number] = id.split(':')
-  const result = await tmdb(`${type}/${number}`, { language: 'de-DE', append_to_response: 'watch/providers' })
+  const result = await tmdb(`${type}/${number}`, { language: 'de-DE', append_to_response: 'watch/providers,external_ids' })
   const today = new Date().toISOString().slice(0, 10)
   const seasons = (result.seasons || [])
     .filter(season => Number.isInteger(season.season_number) && season.season_number > 0 && season.air_date && season.air_date <= today)
@@ -397,14 +488,16 @@ async function mediaDetails(id) {
   const providers = result['watch/providers']?.results?.DE?.flatrate || []
   const verifiedProvider = providers.filter(service => [8, 337, 9, 119].includes(service.provider_id))
     .map(service => service.provider_name).join(', ')
-  const value = { ...mediaSummary(result, type), seasons, verifiedProvider }
+  const region = result['watch/providers']?.results?.DE
+  const value = { ...mediaSummary(result, type), seasons, verifiedProvider, offers: germanOffers(region),
+    availabilityLink: safeOfferLink(region?.link), imdb: result.imdb_id || result.external_ids?.imdb_id }
   if (detailsCache.size >= 250) detailsCache.delete(detailsCache.keys().next().value)
   detailsCache.set(id, { value, expires: Date.now() + 5 * 60_000 })
   return value
 }
 function lookupStatus(list, media) {
   const previous = list.entries[mediaKey(list, media)]
-  return { ...media, status: previous?.status === 'removed' ? '' : previous?.status || '', watchedSeasons: previous?.watchedSeasons || [] }
+  return { ...media, status: ['removed','rotated'].includes(previous?.status) ? '' : previous?.status || '', watchedSeasons: previous?.watchedSeasons || [] }
 }
 async function lookupTitles(list, query, page) {
   const normalized = query.replace(/[^\p{L}\p{N}]/gu, '').toLowerCase()
@@ -433,7 +526,7 @@ function storeSelection(list, selected, remember) {
         (existingTitle && !eligible(existingTitle, list.entries))) {
       throw fail(409, `Bei „${media.title}“ ist zuerst ein früherer Teil an der Reihe.`)
     }
-    if (remember && ((previous && previous.status !== 'removed') || marvelOrder.includes(id))) throw fail(409, `„${media.title}“ steht bereits in deiner Watchlist.`)
+    if (remember && ((previous && !['removed','rotated'].includes(previous.status)) || marvelOrder.includes(id))) throw fail(409, `„${media.title}“ steht bereits in deiner Watchlist.`)
     const published = media.seasons.map(season => season.number)
     const requested = watched || []
     if (!remember && media.type === 'serie' && (!published.length ||
@@ -530,7 +623,7 @@ function mutate(list, input) {
         (input.genre && !genres.includes(input.genre))) throw fail(400, 'Bitte prüfe Titel, Art und Genre.')
     const key = slug(title)
     if (!key) throw fail(400, 'Bitte gib einen gültigen Titel ein.')
-    if (action === 'add' && Object.hasOwn(entries, key) && entries[key].status === 'removed') {
+    if (action === 'add' && Object.hasOwn(entries, key) && ['removed','rotated'].includes(entries[key].status)) {
       entries[key].status = 'reserve'
       return fill(list)
     }
@@ -654,7 +747,10 @@ createServer(async (req, res) => {
           }
           return json(res, await lookupTitles(list, query, page))
         }
-        if (path === '/api/media/details') return json(res, lookupStatus(list, await mediaDetails(url.searchParams.get('id'))))
+        if (path === '/api/media/details') {
+          const details = await mediaDetails(url.searchParams.get('id'))
+          return json(res, lookupStatus(list, { ...details, offers: await streamingOffers(details) }))
+        }
         throw fail(404, 'Nicht gefunden.')
       } catch (error) {
         if (error.status) throw error
@@ -749,6 +845,29 @@ Die Einladung ist sieben Tage gültig.` })
         }
         user = getUser(req)
         if (!user) throw fail(401, 'Bitte melde dich erneut an.')
+      }
+      if (input.action === 'refresh-recommendations') {
+        throttle(`refresh:${user.id}`, 30)
+        const previous = JSON.parse(user.list)
+        const interests = searchInterests(previous)
+        let suggestions = []
+        let searchWarning = ''
+        if (onlineSearch) {
+          try { suggestions = await searchTitles(previous, interests) } catch {
+            searchWarning = 'TMDB war gerade nicht erreichbar. Es wurden verfügbare Titel aus deinem Katalog verwendet.'
+          }
+          user = getUser(req)
+          if (!user) throw fail(401, 'Bitte melde dich erneut an.')
+        }
+        const list = JSON.parse(user.list)
+        if (onlineSearch) list.discoveryPage = (list.discoveryPage || 0) + 1
+        if (JSON.stringify(searchInterests(list)) === JSON.stringify(interests)) addDiscoveries(list, suggestions)
+        const promoted = rotateRecommendations(list)
+        save(user, list)
+        const notice = promoted.length
+          ? `${promoted.length} ${promoted.length === 1 ? 'anderer Vorschlag' : 'andere Vorschläge'} geladen.`
+          : 'Aktuell sind keine anderen passenden Titel verfügbar.'
+        return json(res, { ...view(list, user), promoted, notice: [notice, searchWarning].filter(Boolean).join(' ') })
       }
       const list = JSON.parse(user.list)
       const promoted = selected ? storeSelection(list, selected, remember) : mutate(list, input)
