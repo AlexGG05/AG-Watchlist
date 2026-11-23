@@ -94,10 +94,10 @@ test('separate verified accounts retain their watchlists and recommendation rule
     return loggedIn.headers.get('set-cookie').split(';')[0]
   }
 
-  const demo = await read()
-  assert.equal(demo.titles.length, 15)
-  assert.equal(demo.marvel.id, 'the-first-avenger-captain-america')
-  assert.equal((await post('list', { action: 'seen', id: demo.marvel.id })).status, 401)
+  const firstMarvel = 'the-first-avenger-captain-america'
+  assert.equal((await fetch(`${origin}/api/list`)).status, 401)
+  assert.equal((await fetch(`${origin}/api/household`)).status, 401)
+  assert.equal((await post('list', { action: 'seen', id: firstMarvel })).status, 401)
   const first = await register('imported', 'watchlist')
   const second = await register('independent', 'new')
   const list = await read(first)
@@ -115,9 +115,9 @@ test('separate verified accounts retain their watchlists and recommendation rule
   const archive = await post('list', { action: 'seen', id: 'eine-geistergeschichte-in-venedig', rating: 'Lieblingsfilm' }, first)
   assert.equal(archive.status, 200)
   assert.equal((await post('list', { action: 'seen', id: 'eine-geistergeschichte-in-venedig', rating: 'Lieblingsserie' }, first)).status, 400)
-  assert.equal((await post('list', { action: 'seen', id: demo.marvel.id, rating: 'Gut' }, first)).status, 200)
+  assert.equal((await post('list', { action: 'seen', id: firstMarvel, rating: 'Gut' }, first)).status, 200)
   assert.equal((await read(first)).marvel.id, 'captain-marvel')
-  assert.equal((await read(second)).marvel.id, demo.marvel.id)
+  assert.equal((await read(second)).marvel.id, firstMarvel)
 
   const logged = await post('list', { action: 'log', title: 'Ein eigener Film', type: 'film', genre: 'Musik', rating: 'Gut' }, second)
   assert.equal(logged.status, 200)
@@ -168,4 +168,33 @@ test('separate verified accounts retain their watchlists and recommendation rule
   assert.equal((await post('list', { action: 'seen', id: finished.id, rating: 'Lieblingsserie' }, second)).status, 200)
   assert.deepEqual((await series()).watchedSeasons, [1, 2])
   assert.equal((await read(first)).titles.find(title => title.tmdb === 'movie:51').status, 'reserve')
+  const third = await register('outsider', 'new')
+  const household = async cookie => (await fetch(`${origin}/api/household`, { headers: { Cookie: cookie } })).json()
+  assert.equal((await post('household', { action: 'invite', email: 'independent@example.test' }, first)).status, 409)
+  assert.equal((await post('household', { action: 'create', name: 'Filmabend' }, first)).status, 200)
+  assert.equal((await post('household', { action: 'invite', email: 'INDEPENDENT@example.test' }, first)).status, 200)
+  const pending = (await household(second)).invitations
+  assert.equal(pending.length, 1)
+  assert.equal(pending[0].name, 'Filmabend')
+  assert.deepEqual((await household(third)).invitations, [])
+  assert.equal((await post('household', { action: 'accept', id: pending[0].id }, third)).status, 404)
+  assert.equal((await post('household', { action: 'accept', id: pending[0].id }, second)).status, 200)
+  assert.equal((await post('household', { action: 'accept', id: pending[0].id }, second)).status, 404)
+
+  for (const account of [first, second]) {
+    assert.equal((await post('list', { action: 'add', title: 'Unser Rätsel', type: 'film', genre: 'Mystery' }, account)).status, 200)
+  }
+  const shared = await household(first)
+  assert.deepEqual(shared, await household(second))
+  assert.deepEqual(shared.household.members, ['imported@example.test', 'independent@example.test'])
+  assert.ok(shared.recommendations.some(title => title.title === 'Unser Rätsel'))
+  assert.equal(shared.recommendations.some(title => title.tmdb === 'movie:51'), false)
+  assert.equal(shared.recommendations.some(title => title.title === 'Ein eigener Film'), false)
+  assert.equal(shared.recommendations.some(title => title.rating !== undefined || title.status !== undefined), false)
+  assert.equal((await read(first)).titles.some(title => title.title === 'Ein eigener Film'), false)
+  assert.equal((await post('household', { action: 'leave' }, second)).status, 200)
+  assert.deepEqual((await household(first)).recommendations, [])
+  assert.deepEqual((await household(second)).recommendations, [])
+  assert.equal((await read(second)).titles.some(title => title.title === 'Ein eigener Film'), true)
+
 })

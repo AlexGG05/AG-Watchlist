@@ -108,3 +108,14 @@ dialog::backdrop{background:#0a0712bb}
 .media-detail{display:flex;align-items:start;gap:11px}
 .detail-poster{width:95px;border-radius:6px}
 .compact{padding:3px 7px;margin-top:4px}
+.access{display:grid;min-height:100dvh;place-items:center;padding:24px;background:linear-gradient(90deg,#100e1bf0,#181326b8),url('/hero.webp') center/cover}
+.access-panel{width:min(100%,420px);border:1px solid var(--line);border-radius:18px;background:#1b1728;padding:32px;box-shadow:0 20px 60px #08061280}
+.access-panel .brand{margin-bottom:30px;padding:0}
+.access-panel .modal-head{margin-bottom:16px}
+.household-page{display:grid;gap:16px}
+.household-toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.household-toolbar h2{margin-right:auto}
+.household-members,.household-invite{display:flex;align-items:center;gap:9px;flex-wrap:wrap;padding:12px;border:1px solid var(--line);border-radius:9px}
+.household-members h3{width:100%;font-size:14px}
+.household-members .pill{overflow-wrap:anywhere;max-width:100%}
+.household-invite strong{margin-right:auto}

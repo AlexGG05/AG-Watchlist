@@ -30,6 +30,18 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS sessions (
     hash TEXT PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id), expires INTEGER NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS households (
+    id INTEGER PRIMARY KEY, name TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS household_members (
+    user_id INTEGER PRIMARY KEY REFERENCES users(id),
+    household_id INTEGER NOT NULL REFERENCES households(id) ON DELETE CASCADE
+  );
+  CREATE TABLE IF NOT EXISTS household_invites (
+    id INTEGER PRIMARY KEY,
+    household_id INTEGER NOT NULL REFERENCES households(id) ON DELETE CASCADE,
+    email TEXT NOT NULL, expires INTEGER NOT NULL, UNIQUE (household_id, email)
+  );
 `)
 const monthFormatter = new Intl.DateTimeFormat('de-DE', { timeZone: 'Europe/Berlin', month: 'numeric' })
 const day = 86_400_000
@@ -174,6 +186,122 @@ function throttle(key, limit) {
   attempts.set(key, entry)
 }
 const validEmail = email => email.length <= 254 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
+
+function membership(userId) {
+  return db.prepare('SELECT households.* FROM households JOIN household_members ON households.id = household_id WHERE user_id = ?').get(userId)
+}
+function householdRecommendations(lists) {
+  const candidates = new Map()
+  const blocked = new Set()
+  const identities = entry => [`title:${slug(entry.title)}`, ...(entry.tmdb ? [entry.tmdb] : [])]
+  const profiles = lists.map(list => {
+    const weights = genreWeights(list)
+    const picks = new Set()
+    for (const [id, record] of Object.entries(list.entries)) {
+      const title = catalog.get(id) || list.custom[id]
+      if (!title) continue
+      const entry = { ...title, ...list.media?.[id] }
+      if (['seen','watching','excluded'].includes(record.status)) {
+        for (const identity of identities(entry)) blocked.add(identity)
+        if (record.status === 'seen' && !record.rating) {
+          for (const genre of entry.genres) weights.set(genre, (weights.get(genre) || 0) + 1)
+        }
+      }
+      if (['open','reserve'].includes(record.status) && !entry.predecessor && !['marvel','seasonal'].includes(entry.pool)) {
+        picks.add(identities(entry)[0])
+        candidates.set(identities(entry)[0], entry)
+      }
+    }
+    const scale = Math.max(8, ...weights.values())
+    return { weights, picks, scale }
+  })
+  for (const entry of catalog.values()) {
+    if (entry.pool === 'discovery' && !entry.predecessor && !candidates.has(identities(entry)[0])) candidates.set(identities(entry)[0], entry)
+  }
+  return [...candidates.values()].filter(entry => !identities(entry).some(identity => blocked.has(identity)))
+    .map(entry => {
+      const scores = profiles.map(({ weights, picks, scale }) => {
+        const interest = Math.max(0, ...entry.genres.map(genre => weights.get(genre) || 0)) / scale
+        return interest + (picks.has(identities(entry)[0]) ? 0.35 : 0)
+      })
+      return { entry, score: Math.min(...scores) + scores.reduce((sum, n) => sum + n, 0) / scores.length }
+    })
+    .sort((a, b) => b.score - a.score || a.entry.title.localeCompare(b.entry.title, 'de'))
+    .slice(0, 12)
+    .map(({ entry }) => {
+      const { id, tmdb, title, type, genres, poster, description, extent, year, provider, verifiedProvider } = entry
+      return { id, tmdb, title, type, genres, poster, description, extent, year, provider, verifiedProvider }
+    })
+}
+function householdView(user) {
+  const household = membership(user.id)
+  if (!household) {
+    const invitations = db.prepare(`SELECT household_invites.id, households.name FROM household_invites
+      JOIN households ON households.id = household_id WHERE email = ? AND expires > ? ORDER BY household_invites.id DESC`).all(user.email, Date.now())
+    return { household: null, invitations, recommendations: [] }
+  }
+  const members = db.prepare(`SELECT email, list FROM users JOIN household_members ON users.id = user_id
+    WHERE household_id = ? ORDER BY users.id`).all(household.id)
+  return {
+    household: { name: household.name, members: members.map(member => member.email) },
+    invitations: [],
+    recommendations: members.length >= 2 ? householdRecommendations(members.map(member => JSON.parse(member.list))) : [],
+  }
+}
+function householdAction(user, input) {
+  const current = membership(user.id)
+  if (input.action === 'leave') {
+    if (!current) return
+    db.prepare(`DELETE FROM household_invites WHERE household_id = ? AND email = ?`).run(current.id, user.email)
+    db.prepare('DELETE FROM household_members WHERE user_id = ?').run(user.id)
+    db.prepare('DELETE FROM households WHERE id = ? AND NOT EXISTS (SELECT 1 FROM household_members WHERE household_id = ?)').run(current.id, current.id)
+    return
+  }
+  if (input.action === 'create') {
+    if (current) throw fail(409, 'Du gehörst bereits zu einem Haushalt.')
+    const name = typeof input.name === 'string' ? input.name.trim() : ''
+    if (name.length < 2 || name.length > 60) throw fail(400, 'Der Haushaltsname braucht 2 bis 60 Zeichen.')
+    const { lastInsertRowid } = db.prepare('INSERT INTO households (name) VALUES (?)').run(name)
+    db.prepare('INSERT INTO household_members VALUES (?, ?)').run(user.id, lastInsertRowid)
+    return
+  }
+  if (input.action === 'accept' || input.action === 'decline') {
+    if (!Number.isSafeInteger(input.id)) throw fail(400, 'Ungültige Einladung.')
+    const invite = db.prepare('SELECT * FROM household_invites WHERE id = ? AND email = ? AND expires > ?').get(input.id, user.email, Date.now())
+    if (!invite) throw fail(404, 'Diese Einladung ist abgelaufen oder gehört zu einer anderen E-Mail-Adresse.')
+    if (input.action === 'accept') {
+      if (current) throw fail(409, 'Verlasse zuerst deinen bisherigen Haushalt.')
+      if (db.prepare('SELECT COUNT(*) AS count FROM household_members WHERE household_id = ?').get(invite.household_id).count >= 8) {
+        throw fail(409, 'In diesem Haushalt sind bereits acht Personen.')
+      }
+      db.prepare('INSERT INTO household_members VALUES (?, ?)').run(user.id, invite.household_id)
+    }
+    db.prepare('DELETE FROM household_invites WHERE id = ?').run(invite.id)
+    return
+  }
+  if (input.action !== 'invite') throw fail(400, 'Unbekannte Haushaltsaktion.')
+  if (!current) throw fail(409, 'Erstelle zuerst einen Haushalt.')
+  const email = typeof input.email === 'string' ? input.email.trim().toLowerCase() : ''
+  if (!validEmail(email) || email === user.email) throw fail(400, 'Gib die E-Mail-Adresse der anderen Person ein.')
+  const member = db.prepare('SELECT 1 FROM users JOIN household_members ON users.id = user_id WHERE email = ? AND household_id = ?').get(email, current.id)
+  if (member) throw fail(409, 'Diese Person gehört bereits zum Haushalt.')
+  throttle(`household-invite:${user.id}`, 10)
+  db.prepare('DELETE FROM household_invites WHERE expires <= ?').run(Date.now())
+  db.prepare(`INSERT INTO household_invites (household_id, email, expires) VALUES (?, ?, ?)
+    ON CONFLICT (household_id, email) DO UPDATE SET expires = excluded.expires`).run(current.id, email, Date.now() + 7 * day)
+  return { email, name: current.name }
+}
+function updateHousehold(user, input) {
+  db.exec('BEGIN IMMEDIATE')
+  try {
+    const invite = householdAction(user, input)
+    db.exec('COMMIT')
+    return invite
+  } catch (error) {
+    db.exec('ROLLBACK')
+    throw error
+  }
+}
 
 async function sendVerification(email, verifyToken) {
   const link = new URL('/verify', appUrl)
@@ -465,10 +593,15 @@ createServer(async (req, res) => {
     }
     if (req.method === 'GET' && path === '/api/list') {
       const user = getUser(req)
-      const list = user ? JSON.parse(user.list) : newList('watchlist')
-      if (user) offerFavorites(user, list)
-      else for (const [id, entry] of Object.entries(list.entries)) if (entry.status !== 'open') delete list.entries[id]
+      if (!user) throw fail(401, 'Bitte melde dich an.')
+      const list = JSON.parse(user.list)
+      offerFavorites(user, list)
       return json(res, view(list, user))
+    }
+    if (req.method === 'GET' && path === '/api/household') {
+      const user = getUser(req)
+      if (!user) throw fail(401, 'Bitte melde dich an.')
+      return json(res, householdView(user))
     }
     if (req.method === 'GET' && path.startsWith('/api/media/')) {
       const user = getUser(req)
@@ -535,6 +668,27 @@ createServer(async (req, res) => {
       if (id) db.prepare('DELETE FROM sessions WHERE hash = ?').run(hash(id))
       res.setHeader('Set-Cookie', sessionCookie('', 0))
       return json(res, { ok: true })
+    }
+    if (path === '/api/household') {
+      const user = getUser(req)
+      if (!user) throw fail(401, 'Bitte melde dich an.')
+      const invite = updateHousehold(user, input)
+      let notice = ''
+      if (invite) {
+        const link = new URL('/?household=1', appUrl)
+        notice = 'Einladung hinterlegt. Sie ist im Haushalt des eingeladenen Kontos sichtbar.'
+        if (smtp) {
+          try {
+            await smtp.sendMail({ from: process.env.MAIL_FROM, to: invite.email, subject: 'AG Watchlist · Einladung zum Haushalt',
+              text: `Du wurdest zum Haushalt „${invite.name}“ eingeladen. Melde dich mit dieser E-Mail-Adresse an oder erstelle ein Konto: ${link}
+Die Einladung ist sieben Tage gültig.` })
+            notice = 'Einladung per E-Mail verschickt.'
+          } catch {
+            notice = 'Die Einladung ist im Konto hinterlegt. Der E-Mail-Versand ist fehlgeschlagen.'
+          }
+        }
+      }
+      return json(res, { ...householdView(user), notice })
     }
     if (path === '/api/list') {
       let user = getUser(req)

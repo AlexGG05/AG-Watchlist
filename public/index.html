@@ -9,7 +9,13 @@
   <script type="module" src="/app.js"></script>
 </head>
 <body>
-<div class="layout">
+<main id="access" class="access" hidden>
+  <section class="access-panel" aria-labelledby="modal-title">
+    <a class="brand" href="/"><span class="brand-icon">▶</span><span>AG<span class="brand-light"> Watchlist</span></span></a>
+    <div id="auth-form-slot"></div>
+  </section>
+</main>
+<div class="layout" id="library" hidden>
   <aside class="sidebar">
     <a class="brand" href="/"><span class="brand-icon">▶</span><span>AG<span class="brand-light"> Watchlist</span></span></a>
     <nav aria-label="Watchlist-Bereiche">
@@ -19,6 +25,8 @@
       <button data-tab="seen"><span>✓</span> Gesehen</button>
       <button data-tab="reserve"><span>♧</span> Merkliste</button>
       <button data-tab="excluded"><span>⊘</span> Ausgeschlossen</button>
+      <span class="nav-label nav-special">GEMEINSAM</span>
+      <button data-tab="household"><span>⌂</span> Haushalt</button>
       <span class="nav-label nav-special">SPECIALS</span>
       <button data-tab="marvel"><span>✦</span> Marvel</button>
       <button data-tab="extras" id="extras-tab" hidden><span>♡</span> Extras</button>
@@ -37,7 +45,8 @@
         </div>
         <div class="stats"><div><strong id="open-count">15</strong><span>Offen</span></div><div><strong id="watch-count">3</strong><span>Am schauen</span></div><div><strong id="seen-count">0</strong><span>Gesehen</span></div></div>
       </section>
-      <section class="collection" aria-labelledby="heading">
+      <section class="household-page" id="household-page" aria-labelledby="household-heading" hidden></section>
+      <section class="collection" id="personal-collection" aria-labelledby="heading">
         <div class="section-head"><div><h2 id="heading">Offene Empfehlungen</h2><p id="section-note"></p></div></div>
         <div class="filters">
           <div class="segmented" aria-label="Titelart">

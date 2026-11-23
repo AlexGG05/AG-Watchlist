@@ -29,7 +29,7 @@ async function api(path, input) {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input),
   } : undefined)
   const result = await response.json()
-  if (!response.ok) throw new Error(result.error)
+  if (!response.ok) throw Object.assign(new Error(result.error), { status: response.status })
   return result
 }
 function toast(message) {
@@ -41,11 +41,11 @@ function toast(message) {
 function badge(rating) {
   return make('span', `rating ${ratingClasses[rating]}`, rating)
 }
-function card(entry, repeat = false) {
+function card(entry, repeat = false, shared = false) {
   const article = make('article', 'card')
   const index = stillTitles.indexOf(entry.title)
   const art = make('div', index >= 0 ? `art still a${index}` : 'art')
-  const artwork = button('', () => descriptionDialog(entry), 'art-link')
+  const artwork = button('', () => descriptionDialog(entry, shared), 'art-link')
   artwork.setAttribute('aria-label', `Beschreibung zu ${entry.title}`)
   if (entry.poster) artwork.append(posterImage(entry, 'card-poster'))
   else if (state.data.user && state.data.onlineSearch) watchArtwork(artwork, entry)
@@ -53,7 +53,8 @@ function card(entry, repeat = false) {
   const menu = button('⋯', () => titleDialog(entry, repeat), 'icon-button')
   menu.setAttribute('aria-label', `Optionen für ${entry.title}`)
   art.append(make('span', entry.pool === 'marvel' ? 'pill marvel' : 'pill',
-    entry.pool === 'marvel' ? `MARVEL · ${entry.type === 'serie' ? 'SERIE' : 'FILM'}` : (entry.type === 'serie' ? 'SERIE' : 'FILM')), menu)
+    entry.pool === 'marvel' ? `MARVEL · ${entry.type === 'serie' ? 'SERIE' : 'FILM'}` : (entry.type === 'serie' ? 'SERIE' : 'FILM')))
+  if (!shared) art.append(menu)
   const details = make('div', 'card-body')
   details.append(make('h3', '', entry.title))
   if (entry.genres.length) {
@@ -80,6 +81,10 @@ function card(entry, repeat = false) {
 function render() {
   const data = state.data
   if (!data) return
+  const shared = state.tab === 'household'
+  $('hero').hidden = shared
+  $('personal-collection').hidden = shared
+  $('household-page').hidden = !shared
   const { titles, marvel, seasonal, favorites } = data
   const openCount = titles.filter(entry => entry.status === 'open').length
   $('open-count').textContent = openCount
@@ -89,7 +94,7 @@ function render() {
   $('preferences').hidden = !data.user
   $('account').textContent = data.user ? 'Mein Konto' : 'Anmelden'
   $('extras-tab').hidden = !seasonal.length && !favorites.length && state.tab !== 'extras'
-  const [heading, crumb, note] = headings[state.tab]
+  const [heading, crumb, note] = shared ? ['Haushalt', 'Haushalt', ''] : headings[state.tab]
   $('heading').textContent = heading
   $('crumb').textContent = crumb
   $('section-note').textContent = state.tab === 'open' && openCount < 15
@@ -99,6 +104,7 @@ function render() {
     if (nav.dataset.tab === state.tab) nav.setAttribute('aria-current', 'page')
     else nav.removeAttribute('aria-current')
   }
+  if (shared) return
   for (const type of document.querySelectorAll('[data-type]')) {
     type.classList.toggle('selected', type.dataset.type === state.type)
     type.setAttribute('aria-pressed', String(type.dataset.type === state.type))
@@ -136,7 +142,7 @@ function dialog(title, fields, actions) {
   $('modal-fields').replaceChildren(...fields)
   $('modal-actions').replaceChildren(...actions)
   $('form-status').textContent = ''
-  if (!$('modal').open) $('modal').showModal()
+  if (state.data?.user && !$('modal').open) $('modal').showModal()
 }
 const textOf = (name) => $('modal-form').elements.namedItem(name)?.value || ''
 let busy = false
@@ -155,6 +161,10 @@ function submit(label, handle, className = 'button primary') {
   }, className)
 }
 function auth(mode = 'login', importProfile = false) {
+  $('library').hidden = true
+  $('access').hidden = false
+  $('close').hidden = true
+  $('auth-form-slot').append($('modal-form'))
   const login = mode === 'login'
   const register = mode === 'register'
   const fields = [field('E-Mail', 'email', { type: 'email', required: true, autocomplete: 'email', maxLength: 254 })]
@@ -171,9 +181,7 @@ function auth(mode = 'login', importProfile = false) {
     const result = await api(mode, { email: textOf('email'), password: textOf('password'),
       profile: $('modal-form').elements.namedItem('profile')?.checked ? 'watchlist' : 'new' })
     if (login) {
-      state.data = await api('list')
-      setTab('open')
-      $('modal').close()
+      showLibrary(await api('list'))
       toast('Du bist angemeldet.')
     } else $('form-status').textContent = result.message
   })]
@@ -185,9 +193,13 @@ function account() {
   if (!state.data?.user) return auth()
   dialog('Mein Konto', [make('p', '', state.data.user.email)], [submit('Abmelden', async () => {
     await api('logout', {})
-    state.data = await api('list')
-    setTab('open')
+    state.data = null
+    mediaMatches.clear()
+    $('cards').replaceChildren()
+    $('marvel-preview').replaceChildren()
+    $('household-page').replaceChildren()
     $('modal').close()
+    auth()
   })])
 }
 async function update(input) {
@@ -298,7 +310,7 @@ function watchArtwork(artwork, entry) {
   observedArt.set(artwork, entry)
   artworkObserver?.observe(artwork)
 }
-async function descriptionDialog(entry) {
+async function descriptionDialog(entry, shared = false) {
   const panel = descriptionPanel(entry)
   dialog(entry.title, [panel], [])
   if (!state.data.user || !state.data.onlineSearch) return
@@ -312,7 +324,7 @@ async function descriptionDialog(entry) {
     if (!panel.isConnected || !$('modal').open) return
     const fields = [descriptionPanel({ ...entry, ...details })]
     const actions = []
-    if (details.type === 'serie' && details.seasons.length && details.status !== 'excluded') {
+    if (!shared && details.type === 'serie' && details.seasons.length && details.status !== 'excluded') {
       const selected = new Set(details.watchedSeasons)
       fields.push(seasonFields(details, selected))
       actions.push(submit('Staffelstand speichern', () => update({
@@ -516,12 +528,106 @@ function preferences() {
     }),
   ])
 }
+function showLibrary(data) {
+  state.data = data
+  $('modal').append($('modal-form'))
+  $('close').hidden = false
+  $('access').hidden = true
+  $('library').hidden = false
+  $('genre').replaceChildren(new Option('Alle Genres', ''), ...data.genres.map(genre => new Option(genre)))
+  $('legend').replaceChildren(...[...data.ratings, 'Nicht ansehbar'].map(badge))
+  const url = new URL(location.href)
+  const joined = url.searchParams.has('household')
+  if (joined) {
+    url.searchParams.delete('household')
+    history.replaceState(null, '', url)
+  }
+  setTab(joined ? 'household' : 'open')
+}
+function householdDialog(action) {
+  if (action === 'leave') {
+    dialog('Haushalt verlassen', [make('p', '', 'Möchtest du diesen Haushalt verlassen?')], [
+      submit('Haushalt verlassen', () => changeHousehold({ action })),
+    ])
+    return
+  }
+  const invite = action === 'invite'
+  const fields = invite
+    ? [field('E-Mail-Adresse der anderen Person', 'household-email', { type: 'email', required: true, maxLength: 254 })]
+    : [field('Name des Haushalts', 'household-name', { required: true, minLength: 2, maxLength: 60 })]
+  const title = invite ? 'Person einladen' : 'Haushalt erstellen'
+  dialog(title, fields, [submit(invite ? 'Einladung senden' : title, () => changeHousehold({
+    action, email: textOf('household-email'), name: textOf('household-name'),
+  }))])
+}
+async function changeHousehold(input) {
+  const data = await api('household', input)
+  if ($('modal').open) $('modal').close()
+  if (state.tab === 'household') renderHousehold(data)
+  if (data.notice) toast(data.notice)
+}
+function renderHousehold(data) {
+  const page = $('household-page')
+  const title = make('h2', '', data.household?.name || 'Haushalt')
+  title.id = 'household-heading'
+  const toolbar = make('div', 'household-toolbar')
+  toolbar.append(title)
+  page.replaceChildren(toolbar)
+  if (!data.household) {
+    toolbar.append(button('Haushalt erstellen', () => householdDialog('create'), 'button primary'))
+    if (!data.invitations.length) {
+      page.append(make('p', 'meta', 'Erstelle einen Haushalt, um gemeinsam Empfehlungen zu bekommen.'))
+      return
+    }
+    for (const invite of data.invitations) {
+      const row = make('div', 'household-invite')
+      const status = make('p', 'meta')
+      const controls = ['accept', 'decline'].map(action => button(action === 'accept' ? 'Annehmen' : 'Ablehnen', async () => {
+        for (const control of controls) control.disabled = true
+        try { await changeHousehold({ action, id: invite.id }) } catch (error) {
+          status.textContent = error.message
+          for (const control of controls) control.disabled = false
+        }
+      }))
+      row.append(make('strong', '', `Einladung zu „${invite.name}“`), ...controls, status)
+      page.append(row)
+    }
+    return
+  }
+  toolbar.append(button('Person einladen', () => householdDialog('invite'), 'button primary'),
+    button('Haushalt verlassen', () => householdDialog('leave')))
+  const members = make('div', 'household-members')
+  members.append(make('h3', '', 'Mitglieder'))
+  for (const email of data.household.members) members.append(make('span', 'pill', email))
+  page.append(members, make('h3', '', 'Gemeinsam schauen'))
+  if (data.household.members.length < 2) {
+    page.append(make('p', 'meta', 'Sobald eine zweite Person beitritt, erscheinen hier gemeinsame Vorschläge.'))
+  } else if (!data.recommendations.length) {
+    page.append(make('p', 'meta', 'Aktuell gibt es keine gemeinsamen Vorschläge.'))
+  } else {
+    const cards = make('div', 'cards')
+    cards.append(...data.recommendations.map(entry => card(entry, false, true)))
+    page.append(cards)
+  }
+}
+async function loadHousehold() {
+  const page = $('household-page')
+  const user = state.data.user.email
+  page.replaceChildren(make('p', 'meta', 'Haushalt wird geladen …'))
+  try {
+    const data = await api('household')
+    if (state.tab === 'household' && state.data?.user.email === user) renderHousehold(data)
+  } catch (error) {
+    if (state.tab === 'household' && state.data?.user.email === user) page.replaceChildren(make('p', 'meta', error.message))
+  }
+}
 function setTab(tab) {
   state.tab = tab
   state.type = 'all'
   $('genre').value = ''
   $('search').value = ''
   render()
+  if (tab === 'household') loadHousehold()
 }
 $('account').addEventListener('click', account)
 $('hero-action').addEventListener('click', () => titleSearch(false))
@@ -540,17 +646,17 @@ for (const type of document.querySelectorAll('[data-type]')) type.addEventListen
 })
 $('genre').addEventListener('change', render)
 $('search').addEventListener('input', render)
+const verified = new URLSearchParams(location.search).get('verified')
+if (verified !== null) {
+  const url = new URL(location.href)
+  url.searchParams.delete('verified')
+  history.replaceState(null, '', url)
+}
 try {
-  state.data = await api('list')
-  for (const genre of state.data.genres) $('genre').add(new Option(genre))
-  $('legend').append(...[...state.data.ratings, 'Nicht ansehbar'].map(badge))
-  render()
-  const verified = new URLSearchParams(location.search).get('verified')
-  if (verified !== null) {
-    history.replaceState(null, '', location.pathname)
-    auth(verified === '1' ? 'login' : 'resend')
-    $('form-status').textContent = verified === '1' ? 'E-Mail bestätigt. Du kannst dich jetzt anmelden.' : 'Der Link ist ungültig oder abgelaufen.'
-  }
-} catch {
-  $('cards').replaceChildren(make('p', 'empty', 'Die Watchlist konnte nicht geladen werden. Lade die Seite erneut.'))
+  showLibrary(await api('list'))
+} catch (error) {
+  auth(verified === '0' ? 'resend' : 'login')
+  if (verified !== null) $('form-status').textContent = verified === '1'
+    ? 'E-Mail bestätigt. Du kannst dich jetzt anmelden.' : 'Der Link ist ungültig oder abgelaufen.'
+  else if (error.status !== 401) $('form-status').textContent = 'Die Verbindung zur Watchlist ist fehlgeschlagen.'
 }

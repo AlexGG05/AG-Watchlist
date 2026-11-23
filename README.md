@@ -19,6 +19,12 @@ Hinterlege im Projekt diese Variablen:
 
 Das benannte Volume `watchlist-data` enthält die SQLite-Datenbank mit Konten, Listen, Bewertungen und Sitzungen. Beim Aktualisieren dasselbe Volume beibehalten und für Backups die SQLite-Datenbank konsistent sichern. Ein Projekt mit einer App-Instanz betreiben.
 
+## Anmeldung und Haushalte
+
+Die Mediathek und die API für persönliche Listen setzen ein bestätigtes Konto voraus. In **Haushalt** kannst du einen Haushalt erstellen und weitere Personen per E-Mail einladen. Die Einladung erscheint sieben Tage lang im selben Bereich des eingeladenen Kontos und kann dort angenommen werden. Pro Konto ist ein Haushalt gleichzeitig möglich.
+
+Ab zwei Mitgliedern zeigt **Gemeinsam schauen** Vorschläge aus den persönlichen Empfehlungen, Merklisten und dem lokalen Katalog. Die Rangfolge berücksichtigt die Genre-Interessen und den Seh- und Bewertungsverlauf aller Mitglieder. Gesehene, laufende und ausgeschlossene Titel werden bei allen Mitgliedern berücksichtigt und aus den gemeinsamen Vorschlägen entfernt. Persönliche Listen, Bewertungen und Staffelstände bleiben im jeweiligen Konto.
+
 ## Empfehlungen
 
 - Genre-Interessen lassen sich jederzeit speichern. Bewertungen gesehener Titel mit Genre beeinflussen künftige Vorschläge ebenfalls. Das Speichern der Interessen aktualisiert automatisch entdeckte Empfehlungen, während gemerkte, laufende und bereits gesehene Titel erhalten bleiben. Unter **Titel merken** und **Gesehen eintragen** sucht TMDB nach Filmen und Serien. Die App übernimmt Titelart, Genres, Poster und Beschreibung direkt aus dem ausgewählten Treffer. Mehrere Filme und einzelne Serien-Staffeln können zusammen erfasst werden. Serien mit offenen Staffeln stehen unter **Am schauen**. Ein Klick auf das Bild öffnet die Beschreibung und bei Serien die Staffelverwaltung. Die manuelle Eingabe bleibt für Titel ohne Treffer oder ohne TMDB-Konfiguration verfügbar.
