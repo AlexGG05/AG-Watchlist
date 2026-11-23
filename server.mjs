@@ -72,10 +72,19 @@ function startSession(res, userId) {
   res.setHeader('Set-Cookie', sessionCookie(id, 30 * 86400))
 }
 const staticFiles = new Map([
-  ['/', ['index.html','text/html; charset=utf-8']], ['/app.js',['app.js','text/javascript; charset=utf-8']],
+  ['/app.js',['app.js','text/javascript; charset=utf-8']],
   ['/style.css',['style.css','text/css; charset=utf-8']], ['/stills.webp',['stills.webp','image/webp']],
   ['/hero.webp',['hero.webp','image/webp']],
 ])
+const versionedAssets = new Map()
+let index = readFileSync(new URL('./public/index.html', import.meta.url), 'utf8')
+for (const path of ['/app.js', '/style.css']) {
+  const [file, type] = staticFiles.get(path)
+  const bytes = readFileSync(new URL(`./public/${file}`, import.meta.url))
+  const versionedPath = `/assets/${hash(bytes).slice(0, 16)}/${file}`
+  versionedAssets.set(versionedPath, { bytes, type })
+  index = index.replace(`"${path}"`, `"${versionedPath}"`)
+}
 function json(res, data, status = 200) {
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' })
   res.end(JSON.stringify(data))
@@ -590,11 +599,20 @@ createServer(async (req, res) => {
       res.writeHead(303, { Location: user ? '/?verified=1' : '/?verified=0', 'Cache-Control': 'no-store' })
       return res.end()
     }
+    if (req.method === 'GET' && path === '/') {
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' })
+      return res.end(index)
+    }
+    if (req.method === 'GET' && versionedAssets.has(path)) {
+      const asset = versionedAssets.get(path)
+      res.writeHead(200, { 'Content-Type': asset.type, 'Cache-Control': 'public, max-age=31536000, immutable' })
+      return res.end(asset.bytes)
+    }
     if (req.method === 'GET' && staticFiles.has(path)) {
       const [file, type] = staticFiles.get(path)
       let bytes
       try { bytes = readFileSync(new URL(`./public/${file}`, import.meta.url)) } catch { throw fail(404, 'Datei nicht gefunden.') }
-      res.writeHead(200, { 'Content-Type': type })
+      res.writeHead(200, { 'Content-Type': type, 'Cache-Control': 'no-cache' })
       return res.end(bytes)
     }
     if (req.method === 'GET' && path === '/api/list') {

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import { spawn } from 'node:child_process'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:net'
@@ -92,6 +93,19 @@ test('separate verified accounts retain their watchlists and recommendation rule
     const loggedIn = await post('login', { email, password })
     assert.equal(loggedIn.status, 200)
     return loggedIn.headers.get('set-cookie').split(';')[0]
+  }
+
+  const home = await fetch(origin)
+  assert.equal(home.headers.get('cache-control'), 'no-store')
+  const html = await home.text()
+  for (const name of ['app.js', 'style.css']) {
+    const path = [...html.matchAll(/"(\/assets\/([a-f0-9]{16})\/[^"]+)"/g)].find(match => match[1].endsWith('/' + name))
+    assert.ok(path, `Expected a versioned URL for ${name}`)
+    const asset = await fetch(origin + path[1])
+    assert.equal(asset.status, 200)
+    assert.match(asset.headers.get('cache-control'), /immutable/)
+    const digest = createHash('sha256').update(Buffer.from(await asset.arrayBuffer())).digest('hex')
+    assert.ok(digest.startsWith(path[2]), `Versioned URL must match ${name} contents`)
   }
 
   const firstMarvel = 'the-first-avenger-captain-america'

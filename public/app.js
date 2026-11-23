@@ -42,37 +42,37 @@ function badge(rating) {
   return make('span', `rating ${ratingClasses[rating]}`, rating)
 }
 function card(entry, repeat = false, shared = false) {
-  const article = make('article', 'card')
+  const control = button('', () => titleDialog(entry, repeat, shared), 'card')
+  const title = make('strong', 'card-title', entry.title)
+  control.setAttribute('aria-label', `Details zu ${entry.title}`)
   const index = stillTitles.indexOf(entry.title)
-  const art = make('div', index >= 0 ? `art still a${index}` : 'art')
-  const openDetails = button('', () => titleDialog(entry, repeat, shared), 'card-open')
-  openDetails.setAttribute('aria-label', `Details zu ${entry.title}`)
+  const art = make('span', index >= 0 ? `art still a${index}` : 'art')
   if (entry.poster) art.append(posterImage(entry, 'card-poster'))
   else if (state.data.user && state.data.onlineSearch) watchArtwork(art, entry)
   art.append(make('span', entry.pool === 'marvel' ? 'pill marvel' : 'pill',
     entry.pool === 'marvel' ? `MARVEL · ${entry.type === 'serie' ? 'SERIE' : 'FILM'}` : (entry.type === 'serie' ? 'SERIE' : 'FILM')))
-  const details = make('div', 'card-body')
-  details.append(make('h3', '', entry.title))
+  const details = make('span', 'card-body')
+  details.append(title)
   if (entry.genres.length) {
-    const tags = make('div', 'tags')
+    const tags = make('span', 'tags')
     for (const genre of entry.genres) tags.append(make('span', '', genre))
     details.append(tags)
   }
-  if (entry.reason) details.append(make('p', 'reason', entry.reason))
+  if (entry.reason) details.append(make('span', 'reason', entry.reason))
   if (entry.status === 'excluded') details.append(badge('Nicht ansehbar'))
   else if (entry.rating) details.append(badge(entry.rating))
   if (entry.seasons?.length && Array.isArray(entry.watchedSeasons)) {
     const count = entry.seasons.filter(season => entry.watchedSeasons.includes(season.number)).length
-    details.append(make('p', 'meta', `${count} von ${entry.seasons.length} Staffeln gesehen`))
+    details.append(make('span', 'meta', `${count} von ${entry.seasons.length} Staffeln gesehen`))
   }
   if (repeat) details.append(make('span', 'rating series', '❤️ Erneut ansehen'))
   if (entry.pool === 'marvel' && entry.status === 'watching') details.append(make('span', 'pill', 'Am schauen'))
   if (!['seen','excluded'].includes(entry.status)) {
     const service = entry.verifiedProvider ? `${entry.verifiedProvider} · DE` : entry.provider ? `${entry.provider} · Anbieter prüfen (DE)` : 'Anbieter prüfen (DE)'
-    details.append(make('p', 'meta', [entry.type === 'serie' ? entry.extent || 'Staffeln noch zu prüfen' : 'Spielfilm', service].join(' · ')))
+    details.append(make('span', 'meta', [entry.type === 'serie' ? entry.extent || 'Staffeln noch zu prüfen' : 'Spielfilm', service].join(' · ')))
   }
-  article.append(art, details, openDetails)
-  return article
+  control.append(art, details)
+  return control
 }
 function render() {
   const data = state.data
