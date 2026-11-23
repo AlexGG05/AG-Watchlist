@@ -23,7 +23,7 @@ test('separate verified accounts retain their watchlists and recommendation rule
       }
       if (url.pathname === '/3/search/multi' && url.searchParams.get('query') === 'Star Wars') return Response.json({
         results: [
-          { id: 51, media_type: 'movie', title: 'Star Wars: Testfilm', overview: 'Eine Filmhandlung.', poster_path: '/movie.jpg' },
+          { id: 51, media_type: 'movie', title: 'Star Wars: Testfilm', overview: 'Eine Filmhandlung.', poster_path: '/movie.jpg', genre_ids: [878, 12] },
           { id: 52, media_type: 'tv', name: 'Star Wars: Testserie' },
           { id: 53, media_type: 'person', name: 'Auszuschließender Treffer' },
         ],
@@ -31,6 +31,7 @@ test('separate verified accounts retain their watchlists and recommendation rule
       })
       if (url.pathname === '/3/movie/51') return Response.json({
         id: 51, title: 'Star Wars: Testfilm', overview: 'Eine Filmhandlung.', poster_path: '/movie.jpg',
+        genres: [{ id: 878, name: 'Science Fiction' }, { id: 12, name: 'Abenteuer' }],
       })
       if (url.pathname === '/3/tv/52') return Response.json({
         id: 52, name: 'Star Wars: Testserie', overview: 'Eine Serienhandlung.', poster_path: '/series.jpg',
@@ -136,6 +137,14 @@ test('separate verified accounts retain their watchlists and recommendation rule
   const search = await (await media('search?q=starw+ars', second)).json()
   assert.deepEqual(search.results.map(result => result.tmdb), ['movie:51', 'tv:52'])
   assert.equal(search.more, true)
+  assert.deepEqual(search.results[0].genres, ['Sci-Fi', 'Abenteuer'])
+  const remembered = await post('list', { action: 'remember-selection', items: [{ tmdb: 'movie:51', watched: [] }] }, first)
+  assert.equal(remembered.status, 200)
+  const rememberedFilm = (await remembered.json()).titles.find(title => title.tmdb === 'movie:51')
+  assert.equal(rememberedFilm.status, 'reserve')
+  assert.equal(rememberedFilm.type, 'film')
+  assert.deepEqual(rememberedFilm.genres, ['Sci-Fi', 'Abenteuer'])
+  assert.equal(rememberedFilm.poster, '/movie.jpg')
   const series = async () => (await media('details?id=tv%3A52', second)).json()
   assert.deepEqual((await series()).seasons.map(season => season.number), [1, 2])
 
@@ -147,6 +156,7 @@ test('separate verified accounts retain their watchlists and recommendation rule
   assert.equal(film.poster, '/movie.jpg')
   assert.equal(film.description, 'Eine Filmhandlung.')
   assert.equal(film.status, 'seen')
+  assert.deepEqual(film.genres, ['Sci-Fi', 'Abenteuer'])
   assert.equal(recorded.find(title => title.tmdb === 'tv:52').status, 'watching')
   assert.deepEqual((await series()).watchedSeasons, [2])
   assert.equal((await logSelection([{ tmdb: 'tv:52', watched: [1, 2, 3] }])).status, 400)
@@ -157,5 +167,5 @@ test('separate verified accounts retain their watchlists and recommendation rule
   assert.equal(finished.status, 'seen')
   assert.equal((await post('list', { action: 'seen', id: finished.id, rating: 'Lieblingsserie' }, second)).status, 200)
   assert.deepEqual((await series()).watchedSeasons, [1, 2])
-  assert.equal((await read(first)).titles.some(title => title.tmdb === 'movie:51'), false)
+  assert.equal((await read(first)).titles.find(title => title.tmdb === 'movie:51').status, 'reserve')
 })

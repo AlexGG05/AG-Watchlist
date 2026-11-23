@@ -96,7 +96,7 @@ function genreWeights(list) {
     const strength = record.rating.startsWith('Lieblings') ? 3 :
       record.rating === 'Sehr gut' ? 2 : record.rating === 'Gut' ? 1 : record.rating === 'Schlecht' ? -2 : 0
     const title = catalog.get(id) || list.custom[id]
-    for (const genre of title?.genres || []) weights.set(genre, (weights.get(genre) || 0) + strength)
+    for (const genre of list.media?.[id]?.genres || title?.genres || []) weights.set(genre, (weights.get(genre) || 0) + strength)
   }
   for (const genre of list.interests || []) weights.set(genre, Math.max(0, weights.get(genre) || 0) + 8)
   return weights
@@ -207,12 +207,25 @@ function mediaArtwork(result) {
     description: result.overview || '',
   }
 }
+const mediaGenres = {
+  12: ['Abenteuer'], 14: ['Fantasy'], 16: ['Animation'], 18: ['Drama'], 27: ['Horror'],
+  28: ['Action'], 35: ['Humor'], 36: ['Historie'], 37: ['Western'], 53: ['Thriller'],
+  80: ['Krimi'], 99: ['Dokumentation'], 878: ['Sci-Fi'], 9648: ['Mystery'], 10402: ['Musik'],
+  10749: ['Romanze'], 10751: ['Familie'], 10752: ['Krieg'], 10759: ['Action', 'Abenteuer'],
+  10762: ['Kinder'], 10763: ['Nachrichten'], 10764: ['Reality'], 10765: ['Sci-Fi', 'Fantasy'],
+  10766: ['Seifenoper'], 10767: ['Talkshow'], 10768: ['Krieg'], 10770: ['TV-Film'],
+}
+function genreTags(result) {
+  return [...new Set((result.genres || result.genre_ids || []).flatMap(genre =>
+    mediaGenres[genre.id ?? genre] || (genres.includes(genre.name) ? [genre.name] : [])))]
+}
 function mediaSummary(result, type) {
   return {
     tmdb: `${type}:${result.id}`,
     type: type === 'movie' ? 'film' : 'serie',
     title: result.title || result.name,
     original: result.original_title || result.original_name || '',
+    genres: genreTags(result),
     year: (result.release_date || result.first_air_date || '').slice(0, 4),
     ...mediaArtwork(result),
   }
@@ -236,12 +249,15 @@ async function mediaDetails(id) {
   const stored = detailsCache.get(id)
   if (stored && stored.expires > Date.now()) return stored.value
   const [type, number] = id.split(':')
-  const result = await tmdb(`${type}/${number}`, { language: 'de-DE' })
+  const result = await tmdb(`${type}/${number}`, { language: 'de-DE', append_to_response: 'watch/providers' })
   const today = new Date().toISOString().slice(0, 10)
   const seasons = (result.seasons || [])
     .filter(season => Number.isInteger(season.season_number) && season.season_number > 0 && season.air_date && season.air_date <= today)
     .map(season => ({ number: season.season_number, name: season.name || `Staffel ${season.season_number}` }))
-  const value = { ...mediaSummary(result, type), seasons, genres: (result.genres || []).map(genre => genre.name).filter(genre => genres.includes(genre)) }
+  const providers = result['watch/providers']?.results?.DE?.flatrate || []
+  const verifiedProvider = providers.filter(service => [8, 337, 9, 119].includes(service.provider_id))
+    .map(service => service.provider_name).join(', ')
+  const value = { ...mediaSummary(result, type), seasons, verifiedProvider }
   if (detailsCache.size >= 250) detailsCache.delete(detailsCache.keys().next().value)
   detailsCache.set(id, { value, expires: Date.now() + 5 * 60_000 })
   return value
@@ -262,7 +278,7 @@ async function lookupTitles(list, query, page) {
     more: page < Math.min(result.total_pages, 500),
   }
 }
-function logSelection(list, selected) {
+function storeSelection(list, selected, remember) {
   list.media ||= {}
   for (const { media, watched } of selected) {
     const id = mediaKey(list, media)
@@ -273,29 +289,31 @@ function logSelection(list, selected) {
         (existingTitle && !eligible(existingTitle, list.entries))) {
       throw fail(409, `Bei „${media.title}“ ist zuerst ein früherer Teil an der Reihe.`)
     }
+    if (remember && (previous || marvelOrder.includes(id))) throw fail(409, `„${media.title}“ steht bereits in deiner Watchlist.`)
     const published = media.seasons.map(season => season.number)
     const requested = watched || []
-    if (media.type === 'serie' && (!published.length ||
+    if (!remember && media.type === 'serie' && (!published.length ||
         requested.some(number => !published.includes(number) && !previous?.watchedSeasons?.includes(number)))) {
       throw fail(400, `Bitte wähle veröffentlichte Staffeln für „${media.title}“.`)
     }
     const complete = media.type === 'film' || published.every(number => requested.includes(number))
-    if (!requested.length && !complete && !previous?.watchedSeasons?.length) throw fail(400, 'Bitte wähle mindestens eine Staffel.')
+    if (!remember && !requested.length && !complete && !previous?.watchedSeasons?.length) throw fail(400, 'Bitte wähle mindestens eine Staffel.')
     if (!existingTitle) {
       Object.defineProperty(list.custom, id, {
         value: { ...item(media.title, media.type, media.genres.join(', ')), id, tmdb: media.tmdb }, enumerable: true, writable: true,
       })
     }
-    const status = complete || previous?.status === 'seen' ? 'seen' : 'watching'
+    const status = remember ? 'reserve' : complete || previous?.status === 'seen' ? 'seen' : 'watching'
     list.media[id] = {
       tmdb: media.tmdb, poster: media.poster, description: media.description,
-      seasons: media.seasons,
+      seasons: media.seasons, verifiedProvider: media.verifiedProvider, year: media.year,
+      genres: [...new Set([...(existingTitle?.genres || []), ...media.genres])],
       ...(published.length ? { extent: `${published.length} ${published.length === 1 ? 'Staffel' : 'Staffeln'}` } : {}),
     }
     list.entries[id] = {
       ...previous, status, rating: previous?.rating || '',
       ...(status === 'seen' ? { seenAt: previous?.seenAt || Date.now() } : {}),
-      ...(media.type === 'serie' ? { watchedSeasons: [...new Set(requested)].sort((a, b) => a - b) } : {}),
+      ...(!remember && media.type === 'serie' ? { watchedSeasons: [...new Set(requested)].sort((a, b) => a - b) } : {}),
     }
   }
   return fill(list)
@@ -324,7 +342,7 @@ async function searchTitles(list, interests) {
       const title = details.title || details.name
       if (!title) return null
       const matched = interests.filter(genre => tmdbGenres[genre]?.some(id => result.genre_ids.includes(id)))
-      const tags = [...new Set([...matched, ...details.genres.map(genre => genre.name).filter(genre => genres.includes(genre))])]
+      const tags = [...new Set([...matched, ...genreTags(details)])]
       const reason = matched.length ? `Passt zu deinen Genre-Interessen ${matched.join(', ')}.` : ''
       const studios = details['watch/providers']?.results?.DE?.flatrate || []
       const providers = studios.filter(service => [8, 337, 9, 119].includes(service.provider_id)).map(service => service.provider_name)
@@ -522,7 +540,8 @@ createServer(async (req, res) => {
       let user = getUser(req)
       if (!user) throw fail(401, 'Bitte melde dich an, um die Liste zu bearbeiten.')
       let selected
-      if (input.action === 'log-selection') {
+      const remember = input.action === 'remember-selection'
+      if (remember || input.action === 'log-selection') {
         if (!onlineSearch) throw fail(503, 'Die TMDB-Titelsuche ist noch nicht eingerichtet.')
         const { items } = input
         if (!Array.isArray(items) || !items.length || items.length > 40 ||
@@ -542,7 +561,7 @@ createServer(async (req, res) => {
         if (!user) throw fail(401, 'Bitte melde dich erneut an.')
       }
       const list = JSON.parse(user.list)
-      const promoted = selected ? logSelection(list, selected) : mutate(list, input)
+      const promoted = selected ? storeSelection(list, selected, remember) : mutate(list, input)
       save(user, list)
       const needsMore = Object.values(list.entries).filter(record => record.status === 'open').length < 15
       const localFallbacks = promoted.map(slug).filter(id => catalog.get(id)?.pool === 'discovery' && list.entries[id]?.suggested)

@@ -245,6 +245,13 @@ function seasonFields(entry, checked) {
     label.append(checkbox, season.name)
     group.append(label)
   }
+  if (entry.seasons.length > 1) {
+    group.querySelector('legend').after(button('Alle Staffeln abhaken', () => {
+      for (const input of group.querySelectorAll('input')) {
+        if (!input.checked) input.click()
+      }
+    }, 'button compact'))
+  }
   return group
 }
 function descriptionPanel(entry) {
@@ -317,14 +324,17 @@ async function descriptionDialog(entry) {
     status.textContent = error.message
   }
 }
-function logSearch() {
+function titleSearch(log) {
   if (!state.data?.user) return auth()
-  if (!state.data.onlineSearch) return addTitle(true)
   const queryField = field('Film, Serie oder Reihe suchen', 'media-query', { type: 'search', placeholder: 'z. B. Star Wars', minLength: 2, maxLength: 120 })
   const query = queryField.querySelector('input')
   const results = make('div', 'lookup-results')
   const searchStatus = make('p', 'meta')
   searchStatus.setAttribute('role', 'status')
+  if (!state.data.onlineSearch) {
+    query.disabled = true
+    searchStatus.textContent = 'Die Titelsuche braucht den TMDB-Schlüssel in den Arcane-Projektvariablen.'
+  }
   const selected = new Map()
   const seenResults = new Set()
   let generation = 0
@@ -337,13 +347,14 @@ function logSearch() {
       const expanded = !details.hidden
       details.hidden = expanded
       artwork.setAttribute('aria-expanded', String(!expanded))
-      if (!expanded && entry.type === 'serie') loadSeasons()
+      if (!expanded && log && entry.type === 'serie') loadSeasons()
     }, 'lookup-art')
     artwork.setAttribute('aria-label', `Beschreibung zu ${entry.title}`)
     artwork.setAttribute('aria-expanded', 'false')
     if (entry.poster) artwork.append(posterImage(entry, 'lookup-poster'))
     const copy = make('div', 'lookup-copy')
     copy.append(make('strong', '', entry.title), make('p', 'meta', [entry.type === 'serie' ? 'Serie' : 'Film', entry.year].filter(Boolean).join(' · ')))
+    if (entry.genres?.length) copy.append(make('p', 'meta', entry.genres.join(' · ')))
     const details = make('div', 'lookup-detail')
     details.hidden = true
     details.append(make('p', '', entry.description || 'Keine Inhaltsbeschreibung verfügbar.'))
@@ -377,7 +388,12 @@ function logSearch() {
     }
 
     if (entry.status === 'excluded') copy.append(badge('Nicht ansehbar'))
-    else if (entry.type === 'film') {
+    else if (!log) {
+      if (entry.status) copy.append(make('p', 'meta', 'Bereits in deiner Watchlist'))
+      else copy.append(submit('Titel merken', () => update({
+        action: 'remember-selection', items: [{ tmdb: entry.tmdb, watched: [] }],
+      }), 'button compact'))
+    } else if (entry.type === 'film') {
       const label = make('label', 'checkbox')
       const checkbox = make('input')
       Object.assign(checkbox, { type: 'checkbox', checked: entry.status === 'seen' || selected.has(entry.tmdb), disabled: entry.status === 'seen' })
@@ -441,13 +457,13 @@ function logSearch() {
     clearTimeout(timer)
     search()
   })
-  dialog('Gesehen eintragen', [queryField, searchStatus, results], [
-    submit('Auswahl speichern', async () => {
-      if (!selected.size) throw new Error('Wähle einen Film oder mindestens eine Staffel aus.')
-      await update({ action: 'log-selection', items: [...selected].map(([tmdb, watched]) => ({ tmdb, watched: [...watched] })) })
-    }),
-    button('Titel manuell eintragen', () => addTitle(true)),
-  ])
+  const actions = []
+  if (log && state.data.onlineSearch) actions.push(submit('Auswahl speichern', async () => {
+    if (!selected.size) throw new Error('Wähle einen Film oder mindestens eine Staffel aus.')
+    await update({ action: 'log-selection', items: [...selected].map(([tmdb, watched]) => ({ tmdb, watched: [...watched] })) })
+  }))
+  actions.push(button('Ohne TMDB-Treffer manuell erfassen', () => addTitle(log)))
+  dialog(log ? 'Gesehen eintragen' : 'Titel merken', [queryField, searchStatus, results], actions)
   query.focus()
 }
 
@@ -508,8 +524,8 @@ function setTab(tab) {
   render()
 }
 $('account').addEventListener('click', account)
-$('hero-action').addEventListener('click', () => addTitle())
-$('log-title').addEventListener('click', logSearch)
+$('hero-action').addEventListener('click', () => titleSearch(false))
+$('log-title').addEventListener('click', () => titleSearch(true))
 $('preferences').addEventListener('click', preferences)
 $('close').addEventListener('click', () => { if (!busy) $('modal').close() })
 $('modal').addEventListener('cancel', event => { if (busy) event.preventDefault() })
