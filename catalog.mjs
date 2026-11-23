@@ -65,9 +65,9 @@ const archive = [
   ['Schlecht','film','Avatar 1 und 2'],
 ]
 const marvel = [
-  'The First Avenger: Captain America','Captain Marvel','Iron Man','Iron Man 2','Der unglaubliche Hulk','Thor','Marvel’s The Avengers','Thor – The Dark Kingdom','Iron Man 3','The Return of the First Avenger','Guardians of the Galaxy','Guardians of the Galaxy Vol. 2','Avengers: Age of Ultron','Ant-Man','The First Avenger: Civil War','Black Widow','Black Panther','Spider-Man: Homecoming','Doctor Strange','Thor: Tag der Entscheidung','Ant-Man and the Wasp','Avengers: Infinity War','Avengers: Endgame','Loki','WandaVision','The Falcon and the Winter Soldier','Shang-Chi and the Legend of the Ten Rings','Spider-Man: Far From Home','Eternals','Spider-Man: No Way Home','Doctor Strange im Multiversum des Wahnsinns','Hawkeye','Moon Knight','Black Panther: Wakanda Forever','She-Hulk: Die Anwältin','Ms. Marvel','Thor: Love and Thunder','Werewolf by Night','The Guardians of the Galaxy Holiday Special','Ant-Man and the Wasp: Quantumania','Guardians of the Galaxy Vol. 3','Secret Invasion','The Marvels','Agatha All Along',
+  'The First Avenger: Captain America','Captain Marvel','Iron Man','Iron Man 2','Der unglaubliche Hulk','Thor','Marvel’s The Avengers','Thor – The Dark Kingdom','Iron Man 3','The Return of the First Avenger','Guardians of the Galaxy','Guardians of the Galaxy Vol. 2','Avengers: Age of Ultron','Ant-Man','The First Avenger: Civil War','Black Widow','Black Panther','Spider-Man: Homecoming','Doctor Strange','Thor: Tag der Entscheidung','Ant-Man and the Wasp','Avengers: Infinity War','Avengers: Endgame','Loki','WandaVision','The Falcon and the Winter Soldier','Shang-Chi and the Legend of the Ten Rings','Spider-Man: Far From Home','Eternals','Spider-Man: No Way Home','Doctor Strange im Multiversum des Wahnsinns','Hawkeye','Moon Knight','Black Panther: Wakanda Forever','She-Hulk: Die Anwältin','Ms. Marvel','Thor: Love and Thunder','Werewolf by Night','The Guardians of the Galaxy Holiday Special','Ant-Man and the Wasp: Quantumania','Guardians of the Galaxy Vol. 3','Secret Invasion','The Marvels','Agatha All Along','Echo','Daredevil: Born Again','Captain America: Brave New World','Ironheart','Thunderbolts*','The Fantastic Four: First Steps','Wonder Man',
 ]
-const marvelSeries = new Set(['Loki','WandaVision','The Falcon and the Winter Soldier','Hawkeye','Moon Knight','She-Hulk: Die Anwältin','Ms. Marvel','Secret Invasion','Agatha All Along'])
+const marvelSeries = new Set(['Loki','WandaVision','The Falcon and the Winter Soldier','Hawkeye','Moon Knight','She-Hulk: Die Anwältin','Ms. Marvel','Secret Invasion','Agatha All Along','Echo','Daredevil: Born Again','Ironheart','Wonder Man'])
 export const genres = ['Fantasy','Mystery','Krimi','Thriller','Magie','Übernatürliches','Action','Sci-Fi','Humor','Intrigen','Abenteuer','Märchen','Mythologie','Drama','Historie','Horror','Romanze','Dokumentation','Animation','Musik','Western','Krieg','Familie','Kinder','Reality','Talkshow','Nachrichten','Seifenoper','TV-Film']
 export const ratings = ['Schlecht','Okay','Gut','Sehr gut','Lieblingsserie','Lieblingsfilm']
 export const slug = title => title.normalize('NFKC').toLocaleLowerCase('de').replace(/[’']/g, '').replace(/[^\p{L}\p{N}]+/gu, '-').replace(/^-|-$/g, '')
@@ -135,3 +135,54 @@ for (const [title, tags] of [
 ]) {
   catalog.get(slug(title)).genres = tags.split(', ')
 }
+
+// Released Star Wars films and series with titles independent of TMDB search naming.
+const starWars = [
+  ['film','Star Wars: Episode I – Die dunkle Bedrohung',1893],
+  ['film','Star Wars: Episode II – Angriff der Klonkrieger',1894],
+  ['film','Star Wars: Episode III – Die Rache der Sith',1895],
+  ['film','Krieg der Sterne',11], ['film','Das Imperium schlägt zurück',1891],
+  ['film','Die Rückkehr der Jedi-Ritter',1892], ['film','Star Wars: Das Erwachen der Macht',140607],
+  ['film','Star Wars: Die letzten Jedi',181808], ['film','Star Wars: Der Aufstieg Skywalkers',181812],
+  ['film','Rogue One: A Star Wars Story',330459], ['film','Solo: A Star Wars Story',348350],
+  ['film','Star Wars: The Clone Wars',12180], ['film','Ewoks – Karawane der Tapferen'],
+  ['film','Ewoks – Kampf um Endor'], ['film','The Star Wars Holiday Special'],
+  ['serie','Star Wars: Droids'], ['serie','Star Wars: Ewoks'], ['serie','Star Wars: Clone Wars'],
+  ['serie','Star Wars: The Clone Wars',4194], ['serie','Star Wars Rebels',60554],
+  ['serie','Star Wars Resistance'], ['serie','The Mandalorian',82856], ['serie','Star Wars: The Bad Batch'],
+  ['serie','Das Buch von Boba Fett',115036], ['serie','Obi-Wan Kenobi',92830], ['serie','Andor',83867],
+  ['serie','Ahsoka',114461], ['serie','The Acolyte',202879], ['serie','Star Wars: Skeleton Crew'],
+  ['serie','Star Wars: Visionen'], ['serie','Star Wars: Geschichten der Jedi'],
+  ['serie','Star Wars: Geschichten des Imperiums'], ['serie','Star Wars: Geschichten der Unterwelt'],
+  ['serie','Star Wars: Die Abenteuer der jungen Jedi'], ['serie','Star Wars: Kräfte des Schicksals'],
+  ['serie','Star Wars: Galaxie der Abenteuer'], ['serie','Star Wars: Roll Out'], ['serie','Maul – Shadow Lord'],
+  ['film','The Mandalorian and Grogu'],
+]
+export const starWarsIds = starWars.map(([type, title, tmdbId]) => {
+  const entry = item(title, type, 'Sci-Fi, Abenteuer, Action', '', '', 'universe')
+  if (catalog.has(entry.id)) entry.id += `-${type}`
+  if (tmdbId) entry.tmdb = `${type === 'film' ? 'movie' : 'tv'}:${tmdbId}`
+  catalog.set(entry.id, entry)
+  return entry.id
+})
+
+const marvelMovieIds = {
+  'The First Avenger: Captain America': 1771, 'Captain Marvel': 299537, 'Iron Man': 1726, 'Iron Man 2': 10138,
+  'Der unglaubliche Hulk': 1724, 'Thor': 10195, 'Marvel’s The Avengers': 24428, 'Thor – The Dark Kingdom': 76338,
+  'Iron Man 3': 68721, 'The Return of the First Avenger': 100402, 'Guardians of the Galaxy': 118340,
+  'Guardians of the Galaxy Vol. 2': 283995, 'Avengers: Age of Ultron': 99861, 'Ant-Man': 102899,
+  'The First Avenger: Civil War': 271110, 'Black Widow': 497698, 'Black Panther': 284054,
+  'Spider-Man: Homecoming': 315635, 'Doctor Strange': 284052, 'Thor: Tag der Entscheidung': 284053,
+  'Ant-Man and the Wasp': 363088, 'Avengers: Infinity War': 299536, 'Avengers: Endgame': 299534,
+}
+for (const [title, id] of Object.entries(marvelMovieIds)) catalog.get(slug(title)).tmdb = `movie:${id}`
+
+const marvelExtra = [
+  ['serie','What If…?'], ['serie','Ich bin Groot'], ['serie','X-Men ’97'],
+  ['serie','Your Friendly Neighborhood Spider-Man'], ['serie','Eyes of Wakanda'], ['serie','Marvel Zombies'],
+  ['serie','Marvel’s Daredevil'], ['serie','Marvel’s Jessica Jones'], ['serie','Marvel’s Luke Cage'],
+  ['serie','Marvel’s Iron Fist'], ['serie','Marvel’s The Defenders'], ['serie','Marvel’s The Punisher'],
+  ['serie','Marvel’s Agents of S.H.I.E.L.D.'], ['serie','Marvel’s Agent Carter'],
+]
+export const marvelUniverseIds = [...marvelOrder, ...marvelExtra.map(([type, title]) =>
+  add(title, type, 'Action, Abenteuer', '', '', 'universe'))]

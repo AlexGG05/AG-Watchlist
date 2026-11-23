@@ -29,6 +29,9 @@ test('separate verified accounts retain their watchlists and recommendation rule
       if (url.hostname !== 'api.themoviedb.org' || url.searchParams.get('api_key') !== 'local-fixture') {
         throw new Error('Unexpected request')
       }
+      if (url.pathname === '/3/collection/10') return Response.json({ parts: [
+        { id: 51, title: 'Star Wars: Testfilm', release_date: '2020-01-01' },
+      ] })
       if (url.pathname === '/3/search/multi' && url.searchParams.get('query') === 'Star Wars') return Response.json({
         results: [
           { id: 51, media_type: 'movie', title: 'Star Wars: Testfilm', overview: 'Eine Filmhandlung.', poster_path: '/movie.jpg', genre_ids: [878, 12] },
@@ -287,5 +290,32 @@ test('separate verified accounts retain their watchlists and recommendation rule
   assert.equal(nextRefresh.status, 200)
   assert.notDeepEqual((await nextRefresh.json()).titles.filter(title => title.status === 'open').map(title => title.id),
     nextOpen.map(title => title.id))
+
+  const universe = async name => (await fetch(`${origin}/api/universe?name=${name}`, { headers: { Cookie: third } })).json()
+  const mcu = await universe('marvel')
+  assert.ok(mcu.results.length > 40)
+  assert.equal(mcu.results.find(title => title.next).id, firstMarvel)
+  const laterMarvel = mcu.results.find(title => title.id === 'wandavision')
+  const universeTitle = (id, status) => post('list', { action: 'universe-title', id, status }, third)
+  assert.equal((await universeTitle(laterMarvel.id, 'reserve')).status, 200)
+  assert.equal((await read(third)).titles.find(title => title.id === laterMarvel.id).status, 'reserve')
+  assert.equal((await universeTitle(laterMarvel.id, 'seen')).status, 200)
+  assert.equal((await universe('marvel')).results.find(title => title.id === laterMarvel.id).status, 'seen')
+  assert.equal((await read(third)).marvel.id, firstMarvel)
+  const starWars = await universe('star-wars')
+  assert.ok(starWars.results.some(title => title.title === 'Andor' && title.type === 'serie'))
+  assert.ok(starWars.results.some(title => title.title === 'Krieg der Sterne' && title.type === 'film'))
+  const collection = await (await media('collection?id=10', third)).json()
+  assert.equal(collection.results[0].tmdb, 'movie:51')
+  assert.equal((await post('list', { action: 'log-selection', universe: true,
+    items: [{ tmdb: 'tv:52', watched: [], completeSeries: true }] }, third)).status, 200)
+  assert.deepEqual((await read(third)).titles.find(title => title.tmdb === 'tv:52').watchedSeasons, [1, 2])
+
+  const regular = (await read(first)).titles.find(title => title.status === 'open')
+  const bookmarked = await post('list', { action: 'reserve', id: regular.id }, first)
+  assert.equal(bookmarked.status, 200)
+  const bookmarkList = (await bookmarked.json()).titles
+  assert.equal(bookmarkList.find(title => title.id === regular.id).status, 'reserve')
+  assert.equal(bookmarkList.filter(title => title.status === 'open').length, 15)
 
 })

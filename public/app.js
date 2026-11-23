@@ -10,18 +10,110 @@ const headings = {
 }
 const ratingClasses = { Schlecht: 'bad', Okay: 'ok', Gut: 'good', 'Sehr gut': 'great', Lieblingsserie: 'series', Lieblingsfilm: 'movie', 'Nicht ansehbar': 'excluded' }
 const stillTitles = ['Chilling Adventures of Sabrina', 'Lockwood & Co.', 'Lucifer', 'Dark', 'The Umbrella Academy', 'Once Upon a Time – Es war einmal …']
-const universeOptions = [
-  ['Marvel (MCU)', ''],
-  ['Star Wars', 'Star Wars'],
-  ['Disney · Die Eiskönigin', 'Die Eiskönigin'],
-  ['Disney · Fluch der Karibik', 'Pirates of the Caribbean'],
-  ['Pixar · Toy Story', 'Toy Story'],
-  ['Wizarding World', 'Harry Potter'],
-  ['Mittelerde', 'Der Herr der Ringe'],
-  ['Jurassic Park / World', 'Jurassic'],
-  ['DC · Batman', 'Batman'],
+const universeGroups = [
+  ['Science-Fiction und Superhelden', [
+    { name: 'Marvel (MCU)', curated: 'marvel' },
+    { name: 'Star Wars', curated: 'star-wars', collections: [10], queries: ['Star Wars'] },
+    { name: 'DC', queries: ['Batman', 'Superman', 'Justice League', 'Wonder Woman', 'Suicide Squad', 'Aquaman', 'Peacemaker', 'The Flash', 'Green Lantern', 'Shazam', 'Blue Beetle', 'Titans', 'Doom Patrol'] },
+    { name: 'Spider-Man und Spider-Verse', queries: ['Spider-Man', 'Venom'] },
+    { name: 'X-Men', collections: [748], queries: ['X-Men', 'Wolverine', 'Deadpool', 'The New Mutants', 'Legion'] },
+    { name: 'Star Trek', queries: ['Star Trek'] },
+    { name: 'Doctor Who', queries: ['Doctor Who', 'Torchwood', 'The Sarah Jane Adventures'] },
+    { name: 'Stargate', queries: ['Stargate'] },
+    { name: 'Transformers', queries: ['Transformers'] },
+    { name: 'Alien und Predator', collections: [8091, 399], queries: ['Alien vs. Predator', 'Alien: Earth', 'Prey', 'Predator: Badlands', 'Predator: Killer of Killers'] },
+    { name: 'Jurassic Park und World', collections: [328], queries: ['Jurassic World', 'Jurassic Park'] },
+    { name: 'Matrix', collections: [2344], queries: ['The Animatrix'] },
+    { name: 'Dune', queries: ['Dune'] },
+    { name: 'Terminator', queries: ['Terminator'] },
+    { name: 'Planet der Affen', queries: ['Planet of the Apes'] },
+    { name: 'MonsterVerse', queries: ['Godzilla', 'Kong: Skull Island', 'Monarch: Legacy of Monsters', 'Skull Island'] },
+  ]],
+  ['Disney', [
+    { name: 'Die Eiskönigin', collections: [386382], queries: ['Frozen', 'Olaf'] },
+    { name: 'Fluch der Karibik', collections: [295] },
+    { name: 'Der König der Löwen', queries: ['The Lion King', 'The Lion Guard', 'Timon & Pumbaa', 'Mufasa'] },
+    { name: 'Aladdin', queries: ['Aladdin', 'The Return of Jafar'] },
+    { name: 'Arielle', queries: ['The Little Mermaid'] },
+    { name: 'Die Schöne und das Biest', queries: ['Beauty and the Beast'] },
+    { name: 'Cinderella', queries: ['Cinderella'] },
+    { name: 'Das Dschungelbuch', queries: ['The Jungle Book', 'Jungle Cubs'] },
+    { name: '101 Dalmatiner', queries: ['Dalmatians', 'Cruella'] },
+    { name: 'Lilo & Stitch', queries: ['Lilo & Stitch', 'Stitch!', 'Leroy & Stitch', 'Stitch Has a Glitch'] },
+    { name: 'Vaiana', queries: ['Moana'] },
+    { name: 'Zoomania', queries: ['Zootopia'] },
+    { name: 'Baymax', queries: ['Big Hero 6', 'Baymax'] },
+    { name: 'Rapunzel', queries: ['Tangled', 'Rapunzel’s Tangled Adventure'] },
+    { name: 'Ralph reichts', queries: ['Wreck-It Ralph', 'Ralph Breaks the Internet'] },
+    { name: 'Tron', queries: ['Tron'] },
+    { name: 'Micky Maus', queries: ['Mickey Mouse', 'Mickey and Friends'] },
+    { name: 'Entenhausen', queries: ['DuckTales', 'Darkwing Duck', 'Quack Pack'] },
+    { name: 'Winnie Puuh', queries: ['Winnie the Pooh', 'Tigger', 'Piglet'] },
+    { name: 'Peter Pan und Tinker Bell', queries: ['Peter Pan', 'Tinker Bell'] },
+    { name: 'Bambi', queries: ['Bambi'] },
+    { name: 'Bärenbrüder', queries: ['Brother Bear'] },
+    { name: 'Pocahontas', queries: ['Pocahontas'] },
+    { name: 'Mulan', queries: ['Mulan'] },
+    { name: 'Hercules', queries: ['Hercules'] },
+    { name: 'Atlantis', queries: ['Atlantis: The Lost Empire', 'Atlantis: Milo’s Return'] },
+    { name: 'Ein Königreich für ein Lama', queries: ['The Emperor’s New Groove', 'Kronk’s New Groove', 'The Emperor’s New School'] },
+    { name: 'Phineas und Ferb', queries: ['Phineas and Ferb'] },
+    { name: 'High School Musical', queries: ['High School Musical', 'Sharpay’s Fabulous Adventure'] },
+    { name: 'Descendants', queries: ['Descendants', 'Descendants: Wicked World'] },
+    { name: 'Zombies', queries: ['Disney Zombies', 'Zombies: The Re-Animated Series'] },
+    { name: 'Chip und Chap', queries: ['Chip ’n Dale', 'Rescue Rangers'] },
+    { name: 'Kim Possible', queries: ['Kim Possible'] },
+    { name: 'Proud Family', queries: ['The Proud Family'] },
+    { name: 'Santa Clause', queries: ['The Santa Clause', 'The Santa Clauses'] },
+    { name: 'Hocus Pocus', queries: ['Hocus Pocus'] },
+    { name: 'Narnia', queries: ['The Chronicles of Narnia'] },
+    { name: 'Disney Fairies', queries: ['Tinker Bell', 'Secret of the Wings', 'The Pirate Fairy'] },
+    { name: 'Die Zauberer vom Waverly Place', queries: ['Wizards of Waverly Place', 'Wizards Beyond Waverly Place'] },
+    { name: 'Raven', queries: ['That’s So Raven', 'Raven’s Home', 'Cory in the House'] },
+    { name: 'Hotel Zack & Cody', queries: ['The Suite Life of Zack & Cody', 'The Suite Life on Deck', 'The Suite Life Movie'] },
+    { name: 'Hannah Montana', queries: ['Hannah Montana'] },
+    { name: 'Camp Rock', queries: ['Camp Rock'] },
+    { name: 'Gravity Falls', queries: ['Gravity Falls'] },
+    { name: 'Das Haus der Eulen', queries: ['The Owl House'] },
+    { name: 'Amphibia', queries: ['Amphibia'] },
+    { name: 'Sofia und Elena', queries: ['Sofia the First', 'Elena of Avalor'] },
+    { name: 'Disney Muppets', queries: ['The Muppets', 'Muppet Babies', 'Muppets Haunted Mansion'] },
+  ]],
+  ['Pixar', [
+    { name: 'Toy Story', collections: [10194], queries: ['Toy Story', 'Lightyear', 'Forky Asks a Question', 'Buzz Lightyear of Star Command'] },
+    { name: 'Cars und Planes', queries: ['Cars on the Road', 'Cars Toons', 'Cars 2', 'Cars 3', 'Disney Planes'], collections: [87118] },
+    { name: 'Findet Nemo', collections: [137697] },
+    { name: 'Die Unglaublichen', collections: [468222], queries: ['The Incredibles', 'Incredibles 2', 'Jack-Jack Attack'] },
+    { name: 'Die Monster AG', queries: ['Monsters, Inc.', 'Monsters University', 'Monsters at Work'] },
+    { name: 'Alles steht Kopf', queries: ['Inside Out', 'Dream Productions', 'Riley’s First Date'] },
+    { name: 'Oben', queries: ['Dug Days', 'Carl’s Date', 'Pixar Up'] },
+  ]],
+  ['Weitere Film- und Serienreihen', [
+    { name: 'Wizarding World', collections: [1241, 435259], queries: ['Harry Potter', 'Fantastic Beasts'] },
+    { name: 'Mittelerde', collections: [119, 121755], queries: ['The Lord of the Rings', 'The Hobbit', 'The Rings of Power'] },
+    { name: 'Avatar', collections: [87096] },
+    { name: 'Fast & Furious', collections: [9485], queries: ['Fast & Furious'] },
+    { name: 'James Bond', collections: [645] },
+    { name: 'Mission: Impossible', collections: [87359], queries: ['Mission: Impossible'] },
+    { name: 'Shrek und der gestiefelte Kater', collections: [2150], queries: ['Shrek', 'Puss in Boots'] },
+    { name: 'Drachenzähmen leicht gemacht', queries: ['How to Train Your Dragon', 'DreamWorks Dragons', 'Dragons: The Nine Realms'] },
+    { name: 'Kung Fu Panda', queries: ['Kung Fu Panda'] },
+    { name: 'Ich – Einfach unverbesserlich', queries: ['Despicable Me', 'Minions'] },
+    { name: 'Ice Age', queries: ['Ice Age'] },
+    { name: 'Madagascar', queries: ['Madagascar', 'All Hail King Julien'] },
+    { name: 'Zurück in die Zukunft', collections: [264], queries: ['Back to the Future'] },
+    { name: 'Ghostbusters', queries: ['Ghostbusters'] },
+    { name: 'Indiana Jones', queries: ['Indiana Jones'] },
+    { name: 'Die Tribute von Panem', queries: ['The Hunger Games'] },
+    { name: 'John Wick', queries: ['John Wick', 'Ballerina', 'The Continental'] },
+    { name: 'The Walking Dead', queries: ['The Walking Dead', 'Fear the Walking Dead', 'Daryl Dixon'] },
+    { name: 'Game of Thrones', queries: ['Game of Thrones', 'House of the Dragon', 'A Knight of the Seven Kingdoms'] },
+    { name: 'Pokémon', queries: ['Pokémon'] },
+    { name: 'Dragon Ball', queries: ['Dragon Ball'] },
+    { name: 'One Piece', queries: ['One Piece'] },
+  ]],
 ]
-const state = { tab: 'open', type: 'all', universe: 0, data: null }
+const state = { tab: 'open', type: 'all', universe: null, data: null }
 
 let toastTimer
 function make(tag, className, content) {
@@ -53,8 +145,8 @@ function toast(message) {
 function badge(rating) {
   return make('span', `rating ${ratingClasses[rating]}`, rating)
 }
-function card(entry, repeat = false, shared = false) {
-  const control = button('', () => titleDialog(entry, repeat, shared), 'card')
+function card(entry, repeat = false, shared = false, universe = false) {
+  const control = button('', () => titleDialog(entry, repeat, shared, universe), 'card')
   const title = make('strong', 'card-title', entry.title)
   control.setAttribute('aria-label', `Details zu ${entry.title}`)
   const index = stillTitles.indexOf(entry.title)
@@ -71,6 +163,9 @@ function card(entry, repeat = false, shared = false) {
     details.append(tags)
   }
   if (entry.reason) details.append(make('span', 'reason', entry.reason))
+  if (universe && entry.next) details.append(make('span', 'meta', 'Als Nächstes in der Chronologie'))
+  if (universe && entry.status === 'seen') details.append(make('span', 'meta', 'Gesehen'))
+  if (universe && entry.status === 'reserve') details.append(make('span', 'meta', 'Auf der Merkliste'))
   if (entry.status === 'excluded') details.append(badge('Nicht ansehbar'))
   else if (entry.rating) details.append(badge(entry.rating))
   if (entry.seasons?.length && Array.isArray(entry.watchedSeasons)) {
@@ -210,7 +305,7 @@ function account() {
     $('marvel-preview').replaceChildren()
     $('household-page').replaceChildren()
     $('universe-page').replaceChildren()
-    state.universe = 0
+    state.universe = null
     $('modal').close()
     auth()
   })])
@@ -346,13 +441,26 @@ function watchArtwork(artwork, entry) {
   observedArt.set(artwork, entry)
   artworkObserver?.observe(artwork)
 }
-async function titleDialog(entry, repeat = false, shared = false) {
+async function titleDialog(entry, repeat = false, shared = false, universe = false) {
   const panel = descriptionPanel(entry)
   const progress = make('div')
   const streaming = streamingPanel(entry)
   const fields = [panel, streaming]
   const actions = []
-  if (!shared) {
+  function saveUniverse(status) {
+    const rating = status === 'seen' ? textOf('rating') : ''
+    if (entry.curated) return update({ id: entry.id, action: 'universe-title', status, rating })
+    return update({ action: status === 'seen' ? 'log-selection' : 'remember-selection', universe: true,
+      items: [{ tmdb: entry.tmdb, watched: [], completeSeries: status === 'seen', rating }] })
+  }
+  if (universe && entry.status !== 'excluded') {
+    fields.push(ratingFields(entry), progress)
+    actions.push(submit(entry.status === 'seen' ? 'Bewertung speichern' : 'Als gesehen speichern', () => saveUniverse('seen')))
+    if (!['seen','reserve'].includes(entry.status)) {
+      actions.push(submit('Auf die Merkliste', () => saveUniverse('reserve'), 'button'))
+    }
+  }
+  if (!shared && !universe) {
     if (entry.status === 'excluded') {
       fields.push(badge('Nicht ansehbar'))
     } else {
@@ -360,7 +468,7 @@ async function titleDialog(entry, repeat = false, shared = false) {
       actions.push(submit(entry.status === 'seen' ? 'Bewertung speichern' : 'Als gesehen speichern', () =>
         update({ id: entry.id, action: 'seen', rating: textOf('rating') })))
       if (!['seen','watching'].includes(entry.status)) actions.push(submit('Am schauen', () => update({ id: entry.id, action: 'watching' }), 'button'))
-      if (entry.pool === 'seasonal' && !entry.status) actions.push(submit('Auf die Merkliste', () => update({ id: entry.id, action: 'reserve' }), 'button'))
+      if (entry.status === 'open' || (entry.pool === 'seasonal' && !entry.status)) actions.push(submit('Auf die Merkliste', () => update({ id: entry.id, action: 'reserve' }), 'button'))
       if (['watching', 'reserve'].includes(entry.status)) actions.push(submit(
         entry.status === 'watching' ? 'Aus „Am schauen“ entfernen' : 'Aus Merkliste entfernen',
         () => update({ id: entry.id, action: 'remove' }), 'button'))
@@ -378,7 +486,7 @@ async function titleDialog(entry, repeat = false, shared = false) {
     const selected = new Set(details.watchedSeasons)
     progress.replaceChildren(seasonFields(details, selected), submit('Staffelstand speichern', () => {
       const finished = entry.status === 'seen' || details.seasons.every(season => selected.has(season.number))
-      return update({ action: 'log-selection', items: [{
+      return update({ action: 'log-selection', universe, items: [{
         tmdb: details.tmdb, watched: [...selected], rating: finished ? textOf('rating') : '',
       }] })
     }, 'button compact'))
@@ -596,50 +704,71 @@ function preferences() {
     }),
   ])
 }
-function renderUniverse() {
+async function renderUniverse() {
   const page = $('universe-page')
-  const heading = make('h2', '', 'Universen')
+  const selected = state.universe
+  const heading = make('h2', '', selected?.name || 'Universen')
   heading.id = 'universe-heading'
-  const selector = make('select')
-  selector.setAttribute('aria-label', 'Universum auswählen')
-  universeOptions.forEach(([name], index) => selector.add(new Option(name, index)))
-  selector.value = state.universe
-  selector.addEventListener('change', () => {
-    state.universe = Number(selector.value)
+  page.replaceChildren(heading)
+  if (!selected) {
+    for (const [name, universes] of universeGroups) {
+      const tiles = make('div', 'universe-tiles')
+      for (const item of universes) tiles.append(button(item.name, () => {
+        state.universe = item
+        renderUniverse()
+      }, 'universe-tile'))
+      page.append(make('h3', '', name), tiles)
+    }
+    return
+  }
+  const back = button('‹ Alle Universen', () => {
+    state.universe = null
     renderUniverse()
-    page.querySelector('select').focus()
   })
-  page.replaceChildren(heading, selector)
-  const [name, query] = universeOptions[state.universe]
+  page.prepend(back)
+  const status = make('p', 'meta', 'Titel werden geladen …')
+  status.setAttribute('role', 'status')
   const results = make('div', 'cards')
-  page.append(make('h3', '', name), results)
-  if (!query) {
-    const { marvel, marvelTotal, titles } = state.data
-    const seen = titles.filter(title => title.pool === 'marvel' && title.status === 'seen').length
-    results.before(make('p', 'meta', `${seen} von ${marvelTotal} Titeln gesehen · Chronologie der Handlung`))
-    if (marvel) results.append(card(marvel))
-    else results.append(make('p', 'empty', 'Kein weiterer Marvel-Titel in der Reihenfolge.'))
-    return
+  page.append(status, results)
+  const keys = new Set()
+  const samePage = () => state.tab === 'universes' && results.isConnected
+  function add(entries) {
+    if (!samePage()) return
+    for (const entry of entries) {
+      if (entry.year && Number(entry.year) > new Date().getFullYear()) continue
+      const titleKey = `${entry.type}:${entry.title.normalize('NFKD').toLowerCase().replace(/[^\p{L}\p{N}]/gu, '')}`
+      if (keys.has(titleKey) || (entry.tmdb && keys.has(entry.tmdb))) continue
+      keys.add(titleKey)
+      if (entry.tmdb) keys.add(entry.tmdb)
+      results.append(card({ ...entry, id: entry.id || entry.tmdb }, false, false, true))
+    }
   }
-  if (!state.data.onlineSearch) {
-    results.append(make('p', 'empty', 'Für die Titelliste dieses Universums braucht die App den TMDB-Schlüssel.'))
-    return
+  async function searchAll(query) {
+    for (let current = 1; samePage(); current++) {
+      const data = await api(`media/search?q=${encodeURIComponent(query)}&page=${current}`)
+      add(data.results)
+      if (!data.more) break
+    }
   }
-  const controls = make('div', 'hero-actions')
-  controls.append(button('Titel in der Reihe merken', () => titleSearch(false, query)),
-    button('Gesehen in der Reihe eintragen', () => titleSearch(true, query)))
-  results.before(controls)
-  results.append(make('p', 'empty', 'Titel werden geladen …'))
-  api(`media/search?q=${encodeURIComponent(query)}`).then(data => {
-    if (!results.isConnected) return
-    results.replaceChildren(...data.results.map(entry => card({
-      ...entry, id: entry.tmdb, genres: entry.genres || [],
-    }, false, true)))
-    if (!data.results.length) results.append(make('p', 'empty', 'Keine passenden Titel gefunden.'))
-    if (data.more) results.append(button('Weitere Titel suchen', () => titleSearch(false, query)))
-  }).catch(error => {
-    if (results.isConnected) results.replaceChildren(make('p', 'empty', error.message))
-  })
+  try {
+    if (selected.curated) add((await api(`universe?name=${selected.curated}`)).results)
+    if (state.data?.onlineSearch && samePage()) {
+      const collections = await Promise.allSettled((selected.collections || []).map(async id => {
+        add((await api(`media/collection?id=${id}`)).results)
+      }))
+      const searches = await Promise.allSettled((selected.queries || []).map(searchAll))
+      if ([...collections, ...searches].some(result => result.status === 'rejected')) {
+        status.textContent = results.childElementCount ? 'Ein Teil des TMDB-Katalogs konnte nicht geladen werden.'
+          : 'Der TMDB-Katalog konnte gerade nicht geladen werden.'
+        return
+      }
+    }
+    status.textContent = results.childElementCount ? `${results.childElementCount} Titel`
+      : state.data?.onlineSearch ? 'Keine passenden Filme oder Serien gefunden.'
+        : 'Für dieses Universum braucht die App den TMDB-Schlüssel.'
+  } catch (error) {
+    if (samePage()) status.textContent = error.message
+  }
 }
 function showLibrary(data) {
   state.data = data
@@ -775,7 +904,10 @@ $('modal-form').addEventListener('submit', event => {
   event.preventDefault()
   $('modal-actions').querySelector('.primary')?.click()
 })
-for (const nav of document.querySelectorAll('[data-tab]')) nav.addEventListener('click', () => setTab(nav.dataset.tab))
+for (const nav of document.querySelectorAll('[data-tab]')) nav.addEventListener('click', () => {
+  if (nav.dataset.tab === 'universes') state.universe = null
+  setTab(nav.dataset.tab)
+})
 for (const type of document.querySelectorAll('[data-type]')) type.addEventListener('click', () => {
   state.type = type.dataset.type
   render()

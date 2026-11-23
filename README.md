@@ -34,7 +34,7 @@ Ab zwei Mitgliedern zeigt **Gemeinsam schauen** Vorschläge aus den persönliche
 - Favoriten können nach ungefähr sechs Monaten separat vorgeschlagen werden. Weihnachtsfilme erscheinen im Dezember separat. Das Archiv behält die ursprüngliche Bewertung, bis der Kontoinhaber sie bearbeitet.
 - Empfehlungen und Verfügbarkeitsdaten stammen teilweise von [TMDB](https://www.themoviedb.org/) und JustWatch. Dieses Projekt nutzt die TMDB-API und wird von TMDB weder unterstützt noch zertifiziert.
 
-**Neue Vorschläge** wechselt bis zu sechs offene Empfehlungen. Die App bevorzugt länger nicht angezeigte Titel und fragt mit konfiguriertem TMDB-Schlüssel weitere Seiten ab. Archiv, Merkliste und laufende Titel bleiben erhalten. Unter **Universen** kannst du die Marvel-Chronologie und weitere Film- und Serienreihen aufrufen.
+**Neue Vorschläge** wechselt bis zu sechs offene Empfehlungen. Die App bevorzugt länger nicht angezeigte Titel und fragt mit konfiguriertem TMDB-Schlüssel weitere Seiten ab. Archiv, Merkliste und laufende Titel bleiben erhalten. Unter **Universen** stehen Kacheln für Marvel, Star Wars, viele Disney- und Pixar-Reihen und weitere Film- und Serienuniversen. Die Listen kombinieren gepflegte Titel, TMDB-Sammlungen und automatisch nachgeladene Suchergebnisse. Jede Titelkarte bietet Merkliste und Gesehen-Archiv. Marvel zeigt zusätzlich an, welcher Titel chronologisch als Nächstes ansteht.
 
 Die Titelansicht unterscheidet deutsche Abo-, Zusatzabo-, Leih- und Kaufangebote. TMDB/JustWatch liefert Anbieter und Angebotsart. Für Europreise kann optional ein Schlüssel für die Streaming Availability API über die Arcane-Variable `STREAMING_AVAILABILITY_API_KEY` gesetzt werden. Ohne übermittelten Betrag wird ein ggf. verfügbarer Angebotslink angezeigt.
 

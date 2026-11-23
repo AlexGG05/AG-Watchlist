@@ -132,3 +132,7 @@ dialog::backdrop{background:#0a0712bb}
 .offer-list li{display:grid;gap:2px;background:var(--panel);padding:6px 8px;border-radius:6px;font-size:12px}
 .streaming-offers a{color:var(--purple)}
 @media(max-width:420px){.section-head{flex-wrap:wrap}}
+.universe-page>.button{justify-self:start}
+.universe-tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(160px,100%),1fr));gap:10px}
+.universe-tile{min-height:72px;padding:12px;text-align:left;font-size:14px;font-weight:700;border:1px solid var(--line);border-radius:10px;background:linear-gradient(130deg,#2a2140,var(--panel));color:inherit}
+.universe-tile:hover{border-color:var(--purple)}
