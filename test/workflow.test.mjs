@@ -1,14 +1,20 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import { spawn } from 'node:child_process'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { once } from 'node:events'
 import { test } from 'node:test'
+import { universeCatalog } from '../catalog.mjs'
 
 test('separate verified accounts retain their watchlists and recommendation rules', async t => {
+  const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8')
+  const universeConfig = app.slice(app.indexOf('const universeGroups'), app.indexOf('const state'))
+  const featured = [...universeConfig.matchAll(/\{ name: '([^']+)'(?:, curated: '([^']+)')?/g)]
+  assert.ok(featured.length > 90)
+  for (const [, name, curated] of featured) assert.ok(universeCatalog.get(curated || name)?.length, name)
   const dir = await mkdtemp(join(tmpdir(), 'ag-watchlist-'))
   const socket = createServer()
   socket.listen(0, '127.0.0.1')
@@ -32,6 +38,12 @@ test('separate verified accounts retain their watchlists and recommendation rule
       if (url.pathname === '/3/collection/10') return Response.json({ parts: [
         { id: 51, title: 'Star Wars: Testfilm', release_date: '2020-01-01' },
       ] })
+      if (url.pathname === '/3/search/multi' && url.searchParams.get('query') === 'TMDB limit') {
+        return new Response('{}', { status: 429, headers: { 'Retry-After': '60' } })
+      }
+      if (url.pathname === '/3/search/multi' && url.searchParams.get('query') === 'Riverdale') return Response.json({
+        results: [{ id: 9999, media_type: 'tv', name: 'Riverdale' }], total_pages: 1,
+      })
       if (url.pathname === '/3/search/multi' && url.searchParams.get('query') === 'Star Wars') return Response.json({
         results: [
           { id: 51, media_type: 'movie', title: 'Star Wars: Testfilm', overview: 'Eine Filmhandlung.', poster_path: '/movie.jpg', genre_ids: [878, 12] },
@@ -243,7 +255,7 @@ test('separate verified accounts retain their watchlists and recommendation rule
   const shared = await household(first)
   assert.deepEqual(shared, await household(second))
   assert.deepEqual(shared.household.members, ['imported@example.test', 'independent@example.test'])
-  assert.ok(shared.recommendations.some(title => title.title === 'Unser Rätsel'))
+  assert.equal(shared.recommendations.some(title => title.title === 'Unser Rätsel'), false)
   assert.equal(shared.recommendations.some(title => title.tmdb === 'movie:51'), false)
   assert.equal(shared.recommendations.some(title => title.title === 'Ein eigener Film'), false)
   assert.equal(shared.recommendations.some(title => title.rating !== undefined || title.status !== undefined), false)
@@ -262,7 +274,13 @@ test('separate verified accounts retain their watchlists and recommendation rule
   const openSeries = (await read(third)).titles.find(title => title.status === 'open' && title.type === 'serie')
   const replenished = await post('list', { action: 'seen', id: openSeries.id }, third)
   assert.equal(replenished.status, 200)
-  assert.deepEqual((await replenished.json()).promoted, ['Neues Weltall'])
+  const nextRecommendations = await replenished.json()
+  assert.ok(nextRecommendations.promoted.length)
+  for (const title of ['Neuer Western', 'Neues Weltall']) {
+    assert.equal(nextRecommendations.titles.find(item => item.title === title).status, 'reserve')
+    assert.ok(!nextRecommendations.promoted.includes(title))
+  }
+  assert.deepEqual(nextRecommendations.favorites, [])
 
   const reserveMovie = (await read(first)).titles.find(title => title.tmdb === 'movie:51')
   const remove = (account, id) => post('list', { action: 'remove', id }, account)
@@ -332,5 +350,19 @@ test('separate verified accounts retain their watchlists and recommendation rule
   const bookmarkList = (await bookmarked.json()).titles
   assert.equal(bookmarkList.find(title => title.id === regular.id).status, 'reserve')
   assert.equal(bookmarkList.filter(title => title.status === 'open').length, 15)
+
+  assert.equal((await (await media('search?q=Star+Wars', first)).json()).results.find(result => result.tmdb === 'movie:51').status, 'reserve')
+  assert.equal((await (await media('search?q=Star+Wars', second)).json()).results.find(result => result.tmdb === 'movie:51').status, 'seen')
+  assert.equal((await (await media('search?q=Riverdale', first)).json()).results[0].status, 'excluded')
+  const throttled = await media('search?q=TMDB+limit', third)
+  assert.equal(throttled.status, 429)
+  assert.match((await throttled.json()).error, /TMDB.*Anfragelimit/)
+  assert.equal((await media('search?q=Different+query', third)).status, 429)
+  assert.equal((await media('search?q=Star+Wars', first)).status, 200)
+  const pirates = await universe(encodeURIComponent('Fluch der Karibik'))
+  assert.deepEqual(pirates.results.filter(title => title.tmdb).map(title => title.tmdb),
+    ['movie:22', 'movie:58', 'movie:285', 'movie:1865', 'movie:166426'])
+  assert.equal((await universeTitle(pirates.results[0].id, 'reserve')).status, 200)
+  assert.equal((await universe(encodeURIComponent('Fluch der Karibik'))).results[0].status, 'reserve')
 
 })

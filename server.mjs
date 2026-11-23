@@ -4,7 +4,7 @@ import { mkdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import nodemailer from 'nodemailer'
-import { catalog, genres, item, marvelOrder, marvelUniverseIds, starWarsIds, newList, ratings, slug } from './catalog.mjs'
+import { catalog, genres, item, marvelOrder, universeCatalog, universeTitleIds, newList, ratings, slug } from './catalog.mjs'
 
 const production = process.env.NODE_ENV === 'production'
 const port = Number(process.env.PORT || 3000)
@@ -135,9 +135,48 @@ function searchInterests(list) {
     .sort((a, b) => b[1] - a[1]).slice(0, 4).map(([genre]) => genre)
   return [...new Set([...(list.interests || []), ...inferred])]
 }
-function fill(list, rotating = false, avoid = new Set()) {
+const blockedStatuses = new Set(['reserve', 'seen', 'excluded', 'watching', 'removed'])
+function normalizedTitle(title) {
+  return slug(title.normalize('NFKD').replace(/\p{M}/gu, '')).replace(/-/g, '')
+}
+function recommendationKeys(title) {
+  return [
+    ...[title.title, title.original].filter(Boolean).map(name => `${title.type}:${normalizedTitle(name)}`),
+    ...(title.tmdb ? [title.tmdb] : []),
+  ]
+}
+function blockedRecommendations(list) {
+  const keys = new Set()
+  for (const [id, record] of Object.entries(list.entries)) {
+    if (!blockedStatuses.has(record.status)) continue
+    const title = catalog.get(id) || list.custom[id]
+    if (!title) continue
+    for (const key of recommendationKeys({ ...title, ...list.media?.[id] })) keys.add(key)
+  }
+  return keys
+}
+function reconcileRecommendations(list) {
+  let changed = false
+  for (const [id, record] of Object.entries(list.entries)) {
+    if (record.status !== 'open' || !record.fromReserve) continue
+    list.entries[id] = { ...record, status: 'reserve' }
+    changed = true
+  }
+  const blocked = blockedRecommendations(list)
+  for (const [id, record] of Object.entries(list.entries)) {
+    if (record.status !== 'open' || marvelOrder.includes(id)) continue
+    const title = catalog.get(id) || list.custom[id]
+    if (title && recommendationKeys({ ...title, ...list.media?.[id] }).some(key => blocked.has(key))) {
+      list.entries[id] = { ...record, status: 'rotated', rotatedAt: Date.now() }
+      changed = true
+    }
+  }
+  return changed
+}
+function fill(list, avoid = new Set()) {
   const { entries, custom } = list
   const weights = genreWeights(list)
+  const blocked = blockedRecommendations(list)
   const score = entry => {
     const tags = list.media?.[entry.id]?.genres || entry.genres
     return tags.reduce((total, genre) => total + (weights.get(genre) || 0), 0) / Math.max(1, tags.length)
@@ -151,18 +190,18 @@ function fill(list, rotating = false, avoid = new Set()) {
       const status = entries[entry.id]?.status
       return !avoid.has(entry.id) && entry.pool !== 'marvel' && entry.pool !== 'universe' &&
         !entries[entry.id]?.universeOnly && eligible(entry, entries) &&
-        ((!rotating && status === 'reserve') || status === 'rotated' || (!status && entry.pool === 'discovery'))
+        (status === 'rotated' || (!status && entry.pool === 'discovery')) &&
+        !recommendationKeys({ ...entry, ...list.media?.[entry.id] }).some(key => blocked.has(key))
     })
     const requireFilm = !hasFilm && !changed.some(entry => entry.type === 'film')
     const match = entry => !requireFilm || entry.type === 'film'
     candidates.sort((a, b) => {
-      const priority = entry => Number(entries[entry.id]?.status === 'reserve')
       const recency = entry => entries[entry.id]?.rotatedAt || 0
-      return priority(b) - priority(a) || recency(a) - recency(b) || score(b) - score(a) || Number(Boolean(b.tmdb)) - Number(Boolean(a.tmdb))
+      return recency(a) - recency(b) || score(b) - score(a) || Number(Boolean(b.tmdb)) - Number(Boolean(a.tmdb))
     })
     const next = candidates.find(match) || candidates[0]
     if (!next) break
-    entries[next.id] = { ...entries[next.id], status: 'open', rating: '', suggested: entries[next.id]?.status !== 'reserve', fromReserve: entries[next.id]?.status === 'reserve' }
+    entries[next.id] = { ...entries[next.id], status: 'open', rating: '', suggested: true, fromReserve: false }
     active.push(next.id)
     changed.push(next)
   }
@@ -178,7 +217,7 @@ function rotateRecommendations(list) {
   for (const [id, record] of swap) {
     list.entries[id] = { ...record, status: 'rotated', rotatedAt: Date.now() }
   }
-  const promoted = fill(list, true, new Set(swap.map(([id]) => id)))
+  const promoted = fill(list, new Set(swap.map(([id]) => id)))
   const regular = Object.entries(list.entries).filter(([id, record]) => record.status === 'open' && !marvelOrder.includes(id))
   const missingFilm = !regular.some(([id]) => available(id)?.type === 'film')
   const restore = swap.sort((a, b) => missingFilm
@@ -202,7 +241,7 @@ function rotateRecommendations(list) {
   return promoted
 }
 function view(list, user) {
-  const { entries, custom, rewatch } = list
+  const { entries, custom } = list
   const nextMarvel = currentMarvel(entries)
   const today = Date.now()
   const available = id => catalog.get(id) || custom[id]
@@ -211,28 +250,15 @@ function view(list, user) {
     .map(([id, record]) => ({ ...available(id), ...list.media?.[id], ...record }))
   const current = nextMarvel ? { ...catalog.get(nextMarvel), ...list.media?.[nextMarvel], ...entries[nextMarvel],
     status: ['watching','reserve'].includes(entries[nextMarvel]?.status) ? entries[nextMarvel].status : 'open' } : null
-  const seasonal = monthFormatter.format(today) === '12'
-    ? [...catalog.values()].filter(entry => entry.pool === 'seasonal' && !entries[entry.id]) : []
-  const favorites = titles.filter(entry => entry.status === 'seen' && entry.rating.startsWith('Lieblings') &&
-    (rewatch[entry.id]?.offeredAt === rewatch[entry.id]?.acknowledgedAt
-      ? today - Math.max(entry.seenAt || 0, rewatch[entry.id]?.offeredAt || 0) >= 183 * day
-      : Boolean(rewatch[entry.id]?.offeredAt)))
-  return { user: user ? { email: user.email } : null, titles, marvel: current, marvelTotal: marvelOrder.length, seasonal, favorites, genres, ratings, interests: list.interests || [], onlineSearch }
+  const december = monthFormatter.format(today) === '12'
+  const seasonalBlocked = december ? blockedRecommendations(list) : null
+  const seasonal = december
+    ? [...catalog.values()].filter(entry => entry.pool === 'seasonal' && !entries[entry.id] &&
+      !recommendationKeys(entry).some(key => seasonalBlocked.has(key))) : []
+  return { user: user ? { email: user.email } : null, titles, marvel: current, marvelTotal: marvelOrder.length, seasonal, favorites: [], genres, ratings, interests: list.interests || [], onlineSearch }
 }
 function save(user, list) {
   db.prepare('UPDATE users SET list = ? WHERE id = ?').run(JSON.stringify(list), user.id)
-}
-function offerFavorites(user, list) {
-  const now = Date.now()
-  let changed = false
-  for (const [id, record] of Object.entries(list.entries)) {
-    if (record.status !== 'seen' || !record.rating.startsWith('Lieblings')) continue
-    const prior = list.rewatch[id]
-    if (prior?.offeredAt !== prior?.acknowledgedAt || now - Math.max(record.seenAt || 0, prior?.offeredAt || 0) < 183 * day) continue
-    list.rewatch[id] = { offeredAt: now }
-    changed = true
-  }
-  if (changed) save(user, list)
 }
 const attempts = new Map()
 function throttle(key, limit) {
@@ -252,7 +278,7 @@ function membership(userId) {
 function householdRecommendations(lists) {
   const candidates = new Map()
   const blocked = new Set()
-  const identities = entry => [`title:${slug(entry.title)}`, ...(entry.tmdb ? [entry.tmdb] : [])]
+  const identities = recommendationKeys
   const profiles = lists.map(list => {
     const weights = genreWeights(list)
     const picks = new Set()
@@ -260,13 +286,13 @@ function householdRecommendations(lists) {
       const title = catalog.get(id) || list.custom[id]
       if (!title) continue
       const entry = { ...title, ...list.media?.[id] }
-      if (['seen','watching','excluded'].includes(record.status)) {
+      if (blockedStatuses.has(record.status) || record.fromReserve && record.status === 'open') {
         for (const identity of identities(entry)) blocked.add(identity)
         if (record.status === 'seen' && !record.rating) {
           for (const genre of entry.genres) weights.set(genre, (weights.get(genre) || 0) + 1)
         }
       }
-      if (['open','reserve'].includes(record.status) && !record.universeOnly && !entry.predecessor && !['marvel','seasonal'].includes(entry.pool)) {
+      if (record.status === 'open' && !record.fromReserve && !record.universeOnly && !entry.predecessor && !['marvel','seasonal'].includes(entry.pool)) {
         picks.add(identities(entry)[0])
         candidates.set(identities(entry)[0], entry)
       }
@@ -379,12 +405,39 @@ const tmdbGenres = {
   Märchen: [14], Mythologie: [14, 36], Drama: [18], Historie: [36], Horror: [27],
   Romanze: [10749, 18], Dokumentation: [99], Animation: [16], Musik: [10402], Western: [37], Krieg: [10752, 10768],
 }
+const tmdbCache = new Map()
+const pendingTmdb = new Map()
+let tmdbPausedUntil = 0
+const rateMessage = 'TMDB hat das Anfragelimit erreicht. Bitte versuche es in kurzer Zeit erneut.'
+function cachedTmdb(path, params, cacheMs = 0) {
+  const key = path + '?' + new URLSearchParams(params)
+  const cached = tmdbCache.get(key)
+  if (cached && cached.expires > Date.now()) return Promise.resolve(cached.value)
+  if (pendingTmdb.has(key)) return pendingTmdb.get(key)
+  const request = tmdb(path, params).then(value => {
+    if (cacheMs) {
+      if (tmdbCache.size >= 500) tmdbCache.delete(tmdbCache.keys().next().value)
+      tmdbCache.set(key, { value, expires: Date.now() + cacheMs })
+    }
+    return value
+  }).finally(() => pendingTmdb.delete(key))
+  pendingTmdb.set(key, request)
+  return request
+}
 async function tmdb(path, params) {
+  if (tmdbPausedUntil > Date.now()) throw fail(429, rateMessage)
   const url = new URL(`https://api.themoviedb.org/3/${path}`)
   for (const [key, value] of Object.entries(params)) url.searchParams.set(key, value)
   if (!tmdbToken) url.searchParams.set('api_key', tmdbKey)
   const headers = tmdbToken ? { Authorization: `Bearer ${tmdbToken}` } : {}
   const response = await fetch(url, { headers, signal: AbortSignal.timeout(3500) })
+  if (response.status === 429) {
+    const retry = response.headers.get('Retry-After')
+    const rawWait = /^\d+$/.test(retry || '') ? Number(retry) * 1000 : Date.parse(retry) - Date.now()
+    tmdbPausedUntil = Date.now() + (Number.isFinite(rawWait) && rawWait > 0 ? Math.min(rawWait, 15 * 60_000) : 60_000)
+    throw fail(429, rateMessage)
+  }
+  if ([401,403].includes(response.status)) throw fail(503, 'TMDB hat den Zugriff abgelehnt. Prüfe den TMDB-Schlüssel.')
   if (!response.ok) throw Error(`TMDB ${response.status}`)
   return response.json()
 }
@@ -417,11 +470,15 @@ function mediaSummary(result, type) {
     ...mediaArtwork(result),
   }
 }
+const universeTmdbIds = new Map([...universeTitleIds].flatMap(id => {
+  const tmdb = catalog.get(id).tmdb
+  return tmdb ? [[tmdb, id]] : []
+}))
 function mediaKey(list, media) {
   const titles = [media.title, media.original].filter(Boolean).map(slug)
   const saved = [...new Set([...Object.keys(list.entries), ...Object.keys(list.custom)])].find(id => list.media?.[id]?.tmdb === media.tmdb || list.custom[id]?.tmdb === media.tmdb)
   if (saved) return saved
-  const catalogId = [...marvelOrder, ...starWarsIds].find(id => catalog.get(id).tmdb === media.tmdb)
+  const catalogId = universeTmdbIds.get(media.tmdb)
   if (catalogId) return catalogId
   const identity = titles.find(id => {
     const known = catalog.get(id) || (Object.hasOwn(list.custom, id) && list.custom[id])
@@ -430,6 +487,13 @@ function mediaKey(list, media) {
   })
   const preferred = titles[0]
   if (identity) return identity
+  const normalized = new Set([media.title, media.original].filter(Boolean).map(normalizedTitle))
+  const equivalent = Object.keys(list.entries).find(id => {
+    const title = catalog.get(id) || list.custom[id]
+    const tmdbId = list.media?.[id]?.tmdb || title?.tmdb
+    return title?.type === media.type && (!tmdbId || tmdbId === media.tmdb) && normalized.has(normalizedTitle(title.title))
+  })
+  if (equivalent) return equivalent
   if (preferred && !catalog.has(preferred) && !Object.hasOwn(list.custom, preferred) && !Object.hasOwn(list.entries, preferred)) return preferred
   return `tmdb-${media.tmdb.replace(':', '-')}`
 }
@@ -492,7 +556,7 @@ async function mediaDetails(id) {
   const stored = detailsCache.get(id)
   if (stored && stored.expires > Date.now()) return stored.value
   const [type, number] = id.split(':')
-  const result = await tmdb(`${type}/${number}`, { language: 'de-DE', append_to_response: 'watch/providers,external_ids' })
+  const result = await cachedTmdb(`${type}/${number}`, { language: 'de-DE', append_to_response: 'watch/providers,external_ids' })
   const today = new Date().toISOString().slice(0, 10)
   const seasons = (result.seasons || [])
     .filter(season => Number.isInteger(season.season_number) && season.season_number > 0 && season.air_date && season.air_date <= today)
@@ -509,14 +573,15 @@ async function mediaDetails(id) {
 }
 function lookupStatus(list, media) {
   const previous = list.entries[mediaKey(list, media)]
+  if (previous?.status === 'open' && previous.fromReserve) return { ...media, status: 'reserve', watchedSeasons: previous.watchedSeasons || [] }
   return { ...media, status: ['removed','rotated'].includes(previous?.status) ? '' : previous?.status || '', watchedSeasons: previous?.watchedSeasons || [] }
 }
 async function lookupTitles(list, query, page) {
   const normalized = query.replace(/[^\p{L}\p{N}]/gu, '').toLowerCase()
-  const result = await tmdb('search/multi', {
+  const result = await cachedTmdb('search/multi', {
     query: normalized === 'starwars' ? 'Star Wars' : query,
     page, language: 'de-DE', include_adult: 'false',
-  })
+  }, 10 * 60_000)
   return {
     results: result.results.filter(entry => ['tv','movie'].includes(entry.media_type) && (entry.title || entry.name))
       .map(entry => lookupStatus(list, mediaSummary(entry, entry.media_type))),
@@ -573,6 +638,7 @@ function storeSelection(list, selected, remember, universe = false) {
 }
 async function searchTitles(list, interests) {
   if (!onlineSearch) return []
+  const blocked = blockedRecommendations(list)
   const genreIds = [...new Set(interests.flatMap(genre => tmdbGenres[genre] || []))]
   const pages = await Promise.allSettled(['tv', 'movie'].map(async type => {
     const result = await tmdb(`discover/${type}`, {
@@ -583,7 +649,7 @@ async function searchTitles(list, interests) {
     })
     const candidates = result.results.filter(result => {
       const title = result.title || result.name
-      return title && !catalog.has(slug(title)) && !Object.hasOwn(list.entries, slug(title))
+      return title && !recommendationKeys(mediaSummary(result, type)).some(key => blocked.has(key)) && !catalog.has(slug(title)) && !Object.hasOwn(list.entries, slug(title))
         && !Object.hasOwn(list.custom, slug(title)) && (result.first_air_date || result.release_date || '9999') <= new Date().toISOString().slice(0, 10)
     }).slice(0, 10)
     const details = await Promise.allSettled(candidates.map(async result => {
@@ -593,7 +659,7 @@ async function searchTitles(list, interests) {
       // Film collections need a confirmed viewing order before entering automatic recommendations.
       if (details.belongs_to_collection || /marvel/i.test(details.production_companies?.map(company => company.name).join(' '))) return null
       const title = details.title || details.name
-      if (!title) return null
+      if (!title || recommendationKeys(mediaSummary({ ...details, id: result.id }, type)).some(key => blocked.has(key))) return null
       const matched = interests.filter(genre => tmdbGenres[genre]?.some(id => result.genre_ids.includes(id)))
       const tags = [...new Set([...matched, ...genreTags(details)])]
       const reason = matched.length ? `Passt zu deinen Genre-Interessen ${matched.join(', ')}.` : ''
@@ -606,7 +672,7 @@ async function searchTitles(list, interests) {
           extent ? `${extent} ${extent === 1 ? 'Staffel' : 'Staffeln'}` : '', 'discovery'),
         verifiedProvider: providers.length ? providers.join(', ') : '',
         ...mediaArtwork(details),
-        tmdb: `${type}:${result.id}`,
+        tmdb: `${type}:${result.id}`, original: details.original_title || details.original_name || '',
       }
     }))
     return details.flatMap(result => result.status === 'fulfilled' && result.value ? [result.value] : [])
@@ -615,8 +681,9 @@ async function searchTitles(list, interests) {
   return pages.flatMap(page => page.status === 'fulfilled' ? page.value : [])
 }
 function addDiscoveries(list, suggestions) {
+  const blocked = blockedRecommendations(list)
   for (const entry of suggestions) {
-    if (Object.hasOwn(list.entries, entry.id) || Object.hasOwn(list.custom, entry.id) || catalog.has(entry.id) ||
+    if (recommendationKeys(entry).some(key => blocked.has(key)) || Object.hasOwn(list.entries, entry.id) || Object.hasOwn(list.custom, entry.id) || catalog.has(entry.id) ||
         Object.values(list.custom).some(other => other.tmdb === entry.tmdb) ||
         Object.values(list.media || {}).some(other => other.tmdb === entry.tmdb)) continue
     Object.defineProperty(list.custom, entry.id, { value: entry, enumerable: true, writable: true })
@@ -628,7 +695,7 @@ function mutate(list, input) {
   if (action === 'universe-title') {
     const title = catalog.get(id)
     const status = input.status
-    if (!title || !['marvel','universe'].includes(title.pool)) throw fail(404, 'Titel nicht gefunden.')
+    if (!title || !universeTitleIds.has(id)) throw fail(404, 'Titel nicht gefunden.')
     const key = title.tmdb ? mediaKey(list, title) : id
     const record = Object.hasOwn(entries, key) ? entries[key] : null
     if (!['reserve','seen'].includes(status)) throw fail(400, 'Ungültiger Status.')
@@ -716,7 +783,7 @@ function mutate(list, input) {
     rating: updatedRating,
     ...(action === 'seen' ? { seenAt: previousDate || Date.now() } : {}),
   }
-  return action === 'reserve' ? fill(list, false, new Set([id])) : fill(list)
+  return action === 'reserve' ? fill(list, new Set([id])) : fill(list)
 }
 
 createServer(async (req, res) => {
@@ -754,7 +821,10 @@ createServer(async (req, res) => {
       const user = getUser(req)
       if (!user) throw fail(401, 'Bitte melde dich an.')
       const list = JSON.parse(user.list)
-      offerFavorites(user, list)
+      if (reconcileRecommendations(list)) {
+        fill(list)
+        save(user, list)
+      }
       return json(res, view(list, user))
     }
     if (req.method === 'GET' && path === '/api/household') {
@@ -767,13 +837,14 @@ createServer(async (req, res) => {
       if (!user) throw fail(401, 'Bitte melde dich an.')
       const list = JSON.parse(user.list)
       const name = url.searchParams.get('name')
-      const ids = name === 'marvel' ? marvelUniverseIds : name === 'star-wars' ? starWarsIds : null
+      const ids = universeCatalog.get(name)
       if (!ids) throw fail(404, 'Universum nicht gefunden.')
       const next = currentMarvel(list.entries)
       return json(res, { results: ids.map(id => {
         const entry = catalog.get(id)
-        const record = list.entries[id] || (entry.tmdb && list.entries[mediaKey(list, entry)])
-        return { ...entry, ...list.media?.[id], ...record, curated: true,
+        const ownedId = list.entries[id] || !entry.tmdb ? id : mediaKey(list, entry)
+        const record = list.entries[ownedId]
+        return { ...entry, ...list.media?.[ownedId], ...record, curated: true,
           status: ['removed','rotated'].includes(record?.status) ? '' : record?.status,
           next: name === 'marvel' && id === next }
       }) })
@@ -782,13 +853,13 @@ createServer(async (req, res) => {
       const user = getUser(req)
       if (!user) throw fail(401, 'Bitte melde dich an.')
       if (!onlineSearch) throw fail(503, 'Die TMDB-Titelsuche ist noch nicht eingerichtet.')
-      throttle(`media:${user.id}`, 180)
+      throttle(`media:${user.id}`, 600)
       const list = JSON.parse(user.list)
       try {
         if (path === '/api/media/collection') {
           const id = url.searchParams.get('id') || ''
           if (!/^[1-9][0-9]{0,9}$/.test(id)) throw fail(400, 'Ungültige Sammlung.')
-          const collection = await tmdb(`collection/${id}`, { language: 'de-DE' })
+          const collection = await cachedTmdb(`collection/${id}`, { language: 'de-DE' }, 30 * 60_000)
           return json(res, { results: (collection.parts || []).filter(entry => entry.title)
             .sort((a, b) => (a.release_date || '9999').localeCompare(b.release_date || '9999'))
             .map(entry => lookupStatus(list, mediaSummary(entry, 'movie'))) })
@@ -915,6 +986,7 @@ Die Einladung ist sieben Tage gültig.` })
           if (!user) throw fail(401, 'Bitte melde dich erneut an.')
         }
         const list = JSON.parse(user.list)
+        reconcileRecommendations(list)
         if (onlineSearch) list.discoveryPage = (list.discoveryPage || 0) + 1
         if (JSON.stringify(searchInterests(list)) === JSON.stringify(interests)) addDiscoveries(list, suggestions)
         const promoted = rotateRecommendations(list)
@@ -925,6 +997,7 @@ Die Einladung ist sieben Tage gültig.` })
         return json(res, { ...view(list, user), promoted, notice: [notice, searchWarning].filter(Boolean).join(' ') })
       }
       const list = JSON.parse(user.list)
+      reconcileRecommendations(list)
       const promoted = selected ? storeSelection(list, selected, remember, universe) : mutate(list, input)
       save(user, list)
       const needsMore = Object.values(list.entries).filter(record => record.status === 'open').length < 15
@@ -954,7 +1027,7 @@ Die Einladung ist sieben Tage gültig.` })
               promoted.splice(0, promoted.length, ...retained)
             }
             const avoid = input.action === 'reserve' ? new Set([input.id]) : new Set()
-            promoted.push(...fill(current, false, avoid))
+            promoted.push(...fill(current, avoid))
           }
           save(fresh, current)
           return json(res, { ...view(current, fresh), promoted })

@@ -3,10 +3,10 @@ const headings = {
   open: ['Offene Empfehlungen', 'Empfehlungen', 'Deine nächsten 15 Titel. Marvel läuft separat.'],
   watching: ['Am schauen', 'Am schauen', 'Hier findest du alle Titel, die du begonnen hast.'],
   seen: ['Gesehenes Archiv', 'Gesehen', 'Deine abgeschlossenen Titel und Bewertungen.'],
-  reserve: ['Merkliste', 'Merkliste', 'Diese Titel können als Nächstes nachrücken.'],
+  reserve: ['Merkliste', 'Merkliste', 'Hier findest du deine gemerkten Titel.'],
   excluded: ['Dauerhaft ausgeschlossen', 'Ausgeschlossen', 'Diese Titel werden dir nicht wieder vorgeschlagen.'],
   universes: ['Universen', 'Universen', ''],
-  extras: ['Extras', 'Extras', 'Saisonale Empfehlungen und Favoriten zum Wiedersehen.'],
+  extras: ['Extras', 'Extras', 'Saisonale Empfehlungen.'],
 }
 const ratingClasses = { Schlecht: 'bad', Okay: 'ok', Gut: 'good', 'Sehr gut': 'great', Lieblingsserie: 'series', Lieblingsfilm: 'movie', 'Nicht ansehbar': 'excluded' }
 const stillTitles = ['Chilling Adventures of Sabrina', 'Lockwood & Co.', 'Lucifer', 'Dark', 'The Umbrella Academy', 'Once Upon a Time – Es war einmal …']
@@ -273,7 +273,7 @@ function render() {
   $('cards').replaceChildren(...shown.map(entry => card(entry, state.tab === 'extras' && favorites.includes(entry))))
   if (!shown.length) $('cards').append(make('p', 'empty', 'Keine passenden Titel in diesem Bereich.'))
   $('marvel-preview').replaceChildren()
-  if (state.tab === 'open' && marvel && marvel.status !== 'watching' && matches(marvel)) {
+  if (state.tab === 'open' && marvel && marvel.status === 'open' && matches(marvel)) {
     $('marvel-preview').append(make('h2', '', 'Als Nächstes bei Marvel'), card(marvel))
   }
 }
@@ -616,10 +616,19 @@ function titleSearch(log, initialQuery = '') {
       }
     }
 
-    if (entry.status === 'excluded') copy.append(badge('Nicht ansehbar'))
-    else if (!log) {
-      if (entry.status) copy.append(make('p', 'meta', 'Bereits in deiner Watchlist'))
-      else copy.append(submit('Titel merken', () => update({
+    const entryStatus = { seen: 'Bereits gesehen', excluded: 'Ausgeschlossen', reserve: 'Auf der Merkliste',
+      watching: 'Am schauen', open: 'In deinen Empfehlungen' }[entry.status]
+    if (entryStatus) {
+      const hint = make('span', 'lookup-status', entryStatus)
+      hint.dataset.status = entry.status
+      copy.append(hint)
+    }
+    if (entry.status === 'excluded') {
+      row.append(artwork, copy, details)
+      return row
+    }
+    if (!log) {
+      if (!entry.status) copy.append(submit('Titel merken', () => update({
         action: 'remember-selection', items: [{ tmdb: entry.tmdb, watched: [] }],
       }), 'button compact'))
     } else if (entry.type === 'film') {
@@ -630,8 +639,8 @@ function titleSearch(log, initialQuery = '') {
         if (checkbox.checked) selected.set(entry.tmdb, new Set())
         else selected.delete(entry.tmdb)
       })
-      label.append(checkbox, entry.status === 'seen' ? 'Bereits gesehen' : 'Gesehen')
-      copy.append(label)
+      label.append(checkbox, 'Gesehen')
+      if (entry.status !== 'seen') copy.append(label)
     } else {
       copy.append(button('Staffeln auswählen', () => {
         details.hidden = false
@@ -776,15 +785,18 @@ async function renderUniverse() {
   const results = make('div', 'cards')
   page.append(status, results)
   const keys = new Set()
+  const seenTitles = new Set()
+  const titlesWithoutId = new Set()
   const samePage = () => state.tab === 'universes' && results.isConnected
   function add(entries) {
     if (!samePage()) return
     for (const entry of entries) {
       if (entry.year && Number(entry.year) > new Date().getFullYear()) continue
       const titleKey = `${entry.type}:${entry.title.normalize('NFKD').toLowerCase().replace(/[^\p{L}\p{N}]/gu, '')}`
-      if (keys.has(titleKey) || (entry.tmdb && keys.has(entry.tmdb))) continue
-      keys.add(titleKey)
+      if (entry.tmdb ? keys.has(entry.tmdb) || titlesWithoutId.has(titleKey) : seenTitles.has(titleKey)) continue
+      seenTitles.add(titleKey)
       if (entry.tmdb) keys.add(entry.tmdb)
+      else titlesWithoutId.add(titleKey)
       results.append(card({ ...entry, id: entry.id || entry.tmdb }, false, false, true))
     }
   }
@@ -795,25 +807,28 @@ async function renderUniverse() {
       if (!data.more) break
     }
   }
-  try {
-    if (selected.curated) add((await api(`universe?name=${selected.curated}`)).results)
-    if (state.data?.onlineSearch && samePage()) {
-      const collections = await Promise.allSettled((selected.collections || []).map(async id => {
-        add((await api(`media/collection?id=${id}`)).results)
-      }))
-      const searches = await Promise.allSettled((selected.queries || []).map(searchAll))
-      if ([...collections, ...searches].some(result => result.status === 'rejected')) {
-        status.textContent = results.childElementCount ? 'Ein Teil des TMDB-Katalogs konnte nicht geladen werden.'
-          : 'Der TMDB-Katalog konnte gerade nicht geladen werden.'
-        return
-      }
-    }
-    status.textContent = results.childElementCount ? `${results.childElementCount} Titel`
-      : state.data?.onlineSearch ? 'Keine passenden Filme oder Serien gefunden.'
-        : 'Für dieses Universum braucht die App den TMDB-Schlüssel.'
-  } catch (error) {
+  const name = selected.curated || selected.name
+  try { add((await api(`universe?name=${encodeURIComponent(name)}`)).results) } catch (error) {
     if (samePage()) status.textContent = error.message
   }
+  let issue = ''
+  if (state.data?.onlineSearch && samePage()) {
+    const sources = [
+      ...(selected.collections || []).map(id => async () => add((await api(`media/collection?id=${id}`)).results)),
+      ...(selected.queries || []).map(query => () => searchAll(query)),
+    ]
+    for (const load of sources) {
+      if (!samePage()) return
+      try { await load() } catch (error) {
+        issue = error.message
+        if ([429,503].includes(error.status)) break
+      }
+    }
+  }
+  if (!samePage()) return
+  const count = results.childElementCount
+  status.textContent = [count ? `${count} Titel` : 'Keine passenden Filme oder Serien gefunden.', issue].filter(Boolean).join(' · ')
+
 }
 function showLibrary(data) {
   state.data = data
