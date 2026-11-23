@@ -89,10 +89,27 @@ function eligible(title, entries) {
 function currentMarvel(entries) {
   return marvelOrder.find(id => !['seen','excluded'].includes(entries[id]?.status))
 }
+function genreWeights(list) {
+  const weights = new Map()
+  for (const [id, record] of Object.entries(list.entries)) {
+    if (record.status !== 'seen') continue
+    const strength = record.rating.startsWith('Lieblings') ? 3 :
+      record.rating === 'Sehr gut' ? 2 : record.rating === 'Gut' ? 1 : record.rating === 'Schlecht' ? -2 : 0
+    const title = catalog.get(id) || list.custom[id]
+    for (const genre of title?.genres || []) weights.set(genre, (weights.get(genre) || 0) + strength)
+  }
+  for (const genre of list.interests || []) weights.set(genre, Math.max(0, weights.get(genre) || 0) + 8)
+  return weights
+}
+function searchInterests(list) {
+  const inferred = [...genreWeights(list)].filter(([, score]) => score > 0)
+    .sort((a, b) => b[1] - a[1]).slice(0, 4).map(([genre]) => genre)
+  return [...new Set([...(list.interests || []), ...inferred])]
+}
 function fill(list) {
   const { entries, custom } = list
-  const interests = list.interests || []
-  const score = entry => entry.genres.filter(genre => interests.includes(genre)).length
+  const weights = genreWeights(list)
+  const score = entry => entry.genres.reduce((total, genre) => total + (weights.get(genre) || 0), 0)
   const all = new Map([...catalog, ...Object.values(custom).map(entry => [entry.id, entry])])
   const active = Object.keys(entries).filter(id => entries[id].status === 'open' && !marvelOrder.includes(id))
   const hasFilm = active.some(id => all.get(id)?.type === 'film')
@@ -388,12 +405,13 @@ createServer(async (req, res) => {
       let searchWarning = ''
       if (onlineSearch && (input.action === 'preferences' || needsMore || localFallbacks.length)) {
         try {
-          const suggestions = await searchTitles(list, list.interests || [])
+          const interests = searchInterests(list)
+          const suggestions = await searchTitles(list, interests)
           const fresh = getUser(req)
           if (!fresh) return json(res, { ...view(list, user), promoted })
           const current = JSON.parse(fresh.list)
           current.discoveryPage = (current.discoveryPage || 0) + 1
-          const interestsMatch = JSON.stringify(current.interests) === JSON.stringify(list.interests)
+          const interestsMatch = JSON.stringify(searchInterests(current)) === JSON.stringify(interests)
           if (interestsMatch) {
             addDiscoveries(current, suggestions)
             if (suggestions.length) {

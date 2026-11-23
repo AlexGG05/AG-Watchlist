@@ -121,3 +121,17 @@ for (const [provider, titles] of [
 ]) {
   for (const title of titles) catalog.get(slug(title)).provider = provider
 }
+
+for (const [title, tags] of [
+  ['Pretty Little Liars','Mystery, Thriller, Intrigen'],
+  ['Wednesday','Fantasy, Mystery, Übernatürliches, Humor'],
+  ['Enola Holmes','Mystery, Krimi, Abenteuer'],
+  ['Damsel','Fantasy, Magie, Abenteuer'],
+  ['Kingsman 1 und 2','Action, Abenteuer, Humor'],
+  ['Wicked 1 und 2','Fantasy, Magie, Musik'],
+  ['Elvis','Drama, Musik'],
+  ['Beide Grinch-Filme','Fantasy, Humor'],
+  ['Fluch der Karibik – Filmreihe','Fantasy, Abenteuer, Action, Humor'],
+]) {
+  catalog.get(slug(title)).genres = tags.split(', ')
+}
