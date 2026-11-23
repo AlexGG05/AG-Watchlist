@@ -73,7 +73,7 @@ async function body(req) {
   let incoming = ''
   for await (const part of req) {
     incoming += part
-    if (incoming.length > 8192) throw fail(413, 'Die Eingabe ist zu lang.')
+    if (incoming.length > 32768) throw fail(413, 'Die Eingabe ist zu lang.')
   }
   try {
     const value = JSON.parse(incoming)
@@ -138,8 +138,8 @@ function view(list, user) {
   const available = id => catalog.get(id) || custom[id]
   const titles = Object.entries(entries)
     .filter(([id, record]) => id !== nextMarvel && available(id) && (record.status !== 'reserve' || eligible(available(id), entries)))
-    .map(([id, record]) => ({ ...available(id), ...record }))
-  const current = nextMarvel ? { ...catalog.get(nextMarvel), status: 'open', ...entries[nextMarvel] } : null
+    .map(([id, record]) => ({ ...available(id), ...list.media?.[id], ...record }))
+  const current = nextMarvel ? { ...catalog.get(nextMarvel), ...list.media?.[nextMarvel], status: 'open', ...entries[nextMarvel] } : null
   const seasonal = monthFormatter.format(today) === '12'
     ? [...catalog.values()].filter(entry => entry.pool === 'seasonal' && !entries[entry.id]) : []
   const favorites = titles.filter(entry => entry.status === 'seen' && entry.rating.startsWith('Lieblings') &&
@@ -201,6 +201,105 @@ async function tmdb(path, params) {
   if (!response.ok) throw Error(`TMDB ${response.status}`)
   return response.json()
 }
+function mediaArtwork(result) {
+  return {
+    poster: typeof result.poster_path === 'string' && /^\/[\w.-]+$/.test(result.poster_path) ? result.poster_path : '',
+    description: result.overview || '',
+  }
+}
+function mediaSummary(result, type) {
+  return {
+    tmdb: `${type}:${result.id}`,
+    type: type === 'movie' ? 'film' : 'serie',
+    title: result.title || result.name,
+    original: result.original_title || result.original_name || '',
+    year: (result.release_date || result.first_air_date || '').slice(0, 4),
+    ...mediaArtwork(result),
+  }
+}
+function mediaKey(list, media) {
+  const titles = [media.title, media.original].filter(Boolean).map(slug)
+  const saved = [...new Set([...Object.keys(list.entries), ...Object.keys(list.custom)])].find(id => list.media?.[id]?.tmdb === media.tmdb || list.custom[id]?.tmdb === media.tmdb)
+  const identity = saved || titles.find(id => {
+    const known = catalog.get(id) || (Object.hasOwn(list.custom, id) && list.custom[id])
+    const tmdbId = list.media?.[id]?.tmdb || known?.tmdb
+    return known?.type === media.type && (!tmdbId || tmdbId === media.tmdb)
+  })
+  const preferred = titles[0]
+  if (identity) return identity
+  if (preferred && !catalog.has(preferred) && !Object.hasOwn(list.custom, preferred) && !Object.hasOwn(list.entries, preferred)) return preferred
+  return `tmdb-${media.tmdb.replace(':', '-')}`
+}
+const detailsCache = new Map()
+async function mediaDetails(id) {
+  if (typeof id !== 'string' || !/^(movie|tv):[1-9]\d{0,9}$/.test(id)) throw fail(400, 'Ungültiger Titel.')
+  const stored = detailsCache.get(id)
+  if (stored && stored.expires > Date.now()) return stored.value
+  const [type, number] = id.split(':')
+  const result = await tmdb(`${type}/${number}`, { language: 'de-DE' })
+  const today = new Date().toISOString().slice(0, 10)
+  const seasons = (result.seasons || [])
+    .filter(season => Number.isInteger(season.season_number) && season.season_number > 0 && season.air_date && season.air_date <= today)
+    .map(season => ({ number: season.season_number, name: season.name || `Staffel ${season.season_number}` }))
+  const value = { ...mediaSummary(result, type), seasons, genres: (result.genres || []).map(genre => genre.name).filter(genre => genres.includes(genre)) }
+  if (detailsCache.size >= 250) detailsCache.delete(detailsCache.keys().next().value)
+  detailsCache.set(id, { value, expires: Date.now() + 5 * 60_000 })
+  return value
+}
+function lookupStatus(list, media) {
+  const previous = list.entries[mediaKey(list, media)]
+  return { ...media, status: previous?.status || '', watchedSeasons: previous?.watchedSeasons || [] }
+}
+async function lookupTitles(list, query, page) {
+  const normalized = query.replace(/[^\p{L}\p{N}]/gu, '').toLowerCase()
+  const result = await tmdb('search/multi', {
+    query: normalized === 'starwars' ? 'Star Wars' : query,
+    page, language: 'de-DE', include_adult: 'false',
+  })
+  return {
+    results: result.results.filter(entry => ['tv','movie'].includes(entry.media_type) && (entry.title || entry.name))
+      .map(entry => lookupStatus(list, mediaSummary(entry, entry.media_type))),
+    more: page < Math.min(result.total_pages, 500),
+  }
+}
+function logSelection(list, selected) {
+  list.media ||= {}
+  for (const { media, watched } of selected) {
+    const id = mediaKey(list, media)
+    const previous = Object.hasOwn(list.entries, id) ? list.entries[id] : null
+    const existingTitle = catalog.get(id) || (Object.hasOwn(list.custom, id) && list.custom[id])
+    if (previous?.status === 'excluded') throw fail(409, `„${media.title}“ ist dauerhaft ausgeschlossen.`)
+    if ((marvelOrder.includes(id) && !previous && id !== currentMarvel(list.entries)) ||
+        (existingTitle && !eligible(existingTitle, list.entries))) {
+      throw fail(409, `Bei „${media.title}“ ist zuerst ein früherer Teil an der Reihe.`)
+    }
+    const published = media.seasons.map(season => season.number)
+    const requested = watched || []
+    if (media.type === 'serie' && (!published.length ||
+        requested.some(number => !published.includes(number) && !previous?.watchedSeasons?.includes(number)))) {
+      throw fail(400, `Bitte wähle veröffentlichte Staffeln für „${media.title}“.`)
+    }
+    const complete = media.type === 'film' || published.every(number => requested.includes(number))
+    if (!requested.length && !complete && !previous?.watchedSeasons?.length) throw fail(400, 'Bitte wähle mindestens eine Staffel.')
+    if (!existingTitle) {
+      Object.defineProperty(list.custom, id, {
+        value: { ...item(media.title, media.type, media.genres.join(', ')), id, tmdb: media.tmdb }, enumerable: true, writable: true,
+      })
+    }
+    const status = complete || previous?.status === 'seen' ? 'seen' : 'watching'
+    list.media[id] = {
+      tmdb: media.tmdb, poster: media.poster, description: media.description,
+      seasons: media.seasons,
+      ...(published.length ? { extent: `${published.length} ${published.length === 1 ? 'Staffel' : 'Staffeln'}` } : {}),
+    }
+    list.entries[id] = {
+      ...previous, status, rating: previous?.rating || '',
+      ...(status === 'seen' ? { seenAt: previous?.seenAt || Date.now() } : {}),
+      ...(media.type === 'serie' ? { watchedSeasons: [...new Set(requested)].sort((a, b) => a - b) } : {}),
+    }
+  }
+  return fill(list)
+}
 async function searchTitles(list, interests) {
   if (!onlineSearch) return []
   const genreIds = [...new Set(interests.flatMap(genre => tmdbGenres[genre] || []))]
@@ -235,6 +334,7 @@ async function searchTitles(list, interests) {
         ...item(title, type === 'tv' ? 'serie' : 'film', tags.join(', '), [reason, details.overview?.slice(0, 200)].filter(Boolean).join(' '),
           extent ? `${extent} ${extent === 1 ? 'Staffel' : 'Staffeln'}` : '', 'discovery'),
         verifiedProvider: providers.length ? providers.join(', ') : '',
+        ...mediaArtwork(details),
         tmdb: `${type}:${result.id}`,
       }
     }))
@@ -246,7 +346,8 @@ async function searchTitles(list, interests) {
 function addDiscoveries(list, suggestions) {
   for (const entry of suggestions) {
     if (Object.hasOwn(list.entries, entry.id) || Object.hasOwn(list.custom, entry.id) || catalog.has(entry.id) ||
-        Object.values(list.custom).some(other => other.tmdb === entry.tmdb)) continue
+        Object.values(list.custom).some(other => other.tmdb === entry.tmdb) ||
+        Object.values(list.media || {}).some(other => other.tmdb === entry.tmdb)) continue
     Object.defineProperty(list.custom, entry.id, { value: entry, enumerable: true, writable: true })
   }
 }
@@ -314,6 +415,7 @@ function mutate(list, input) {
   const updatedRating = action === 'seen' ? rating || existing?.rating || '' : ''
   const previousDate = existing?.rating === updatedRating ? existing?.seenAt : null
   entries[id] = {
+    ...existing,
     status: action,
     rating: updatedRating,
     ...(action === 'seen' ? { seenAt: previousDate || Date.now() } : {}),
@@ -324,7 +426,7 @@ function mutate(list, input) {
 createServer(async (req, res) => {
   res.setHeader('X-Content-Type-Options', 'nosniff')
   res.setHeader('Referrer-Policy', 'no-referrer')
-  res.setHeader('Content-Security-Policy', "default-src 'self'; style-src 'self'; frame-ancestors 'none'; form-action 'self'; base-uri 'none'")
+  res.setHeader('Content-Security-Policy', "default-src 'self'; style-src 'self'; img-src 'self' https://image.tmdb.org; frame-ancestors 'none'; form-action 'self'; base-uri 'none'")
   try {
     const url = new URL(req.url, appUrl)
     const path = url.pathname
@@ -349,6 +451,28 @@ createServer(async (req, res) => {
       if (user) offerFavorites(user, list)
       else for (const [id, entry] of Object.entries(list.entries)) if (entry.status !== 'open') delete list.entries[id]
       return json(res, view(list, user))
+    }
+    if (req.method === 'GET' && path.startsWith('/api/media/')) {
+      const user = getUser(req)
+      if (!user) throw fail(401, 'Bitte melde dich an.')
+      if (!onlineSearch) throw fail(503, 'Die TMDB-Titelsuche ist noch nicht eingerichtet.')
+      throttle(`media:${user.id}`, 180)
+      const list = JSON.parse(user.list)
+      try {
+        if (path === '/api/media/search') {
+          const query = url.searchParams.get('q')?.trim() || ''
+          const page = Number(url.searchParams.get('page') || 1)
+          if (query.length < 2 || query.length > 120 || !Number.isInteger(page) || page < 1 || page > 500) {
+            throw fail(400, 'Bitte gib einen Titel mit 2 bis 120 Zeichen ein.')
+          }
+          return json(res, await lookupTitles(list, query, page))
+        }
+        if (path === '/api/media/details') return json(res, lookupStatus(list, await mediaDetails(url.searchParams.get('id'))))
+        throw fail(404, 'Nicht gefunden.')
+      } catch (error) {
+        if (error.status) throw error
+        throw fail(502, 'TMDB ist gerade nicht erreichbar.')
+      }
     }
     if (req.method !== 'POST' || !path.startsWith('/api/')) throw fail(404, 'Nicht gefunden.')
     if (req.headers.origin && req.headers.origin !== appUrl.origin &&
@@ -395,10 +519,30 @@ createServer(async (req, res) => {
       return json(res, { ok: true })
     }
     if (path === '/api/list') {
-      const user = getUser(req)
+      let user = getUser(req)
       if (!user) throw fail(401, 'Bitte melde dich an, um die Liste zu bearbeiten.')
+      let selected
+      if (input.action === 'log-selection') {
+        if (!onlineSearch) throw fail(503, 'Die TMDB-Titelsuche ist noch nicht eingerichtet.')
+        const { items } = input
+        if (!Array.isArray(items) || !items.length || items.length > 40 ||
+            items.some(entry => !entry || typeof entry.tmdb !== 'string' || !Array.isArray(entry.watched) ||
+              entry.watched.length > 200 || entry.watched.some(number => !Number.isInteger(number) || number < 1))) {
+          throw fail(400, 'Wähle zwischen einem und 40 gültigen Titeln.')
+        }
+        if (new Set(items.map(entry => entry.tmdb)).size !== items.length) throw fail(400, 'Titel dürfen nur einmal ausgewählt werden.')
+        throttle(`media-save:${user.id}`, 45)
+        try {
+          selected = await Promise.all(items.map(async entry => ({ media: await mediaDetails(entry.tmdb), watched: entry.watched })))
+        } catch (error) {
+          if (error.status) throw error
+          throw fail(502, 'Die Titeldaten konnten gerade nicht geladen werden. Bitte versuche es erneut.')
+        }
+        user = getUser(req)
+        if (!user) throw fail(401, 'Bitte melde dich erneut an.')
+      }
       const list = JSON.parse(user.list)
-      const promoted = mutate(list, input)
+      const promoted = selected ? logSelection(list, selected) : mutate(list, input)
       save(user, list)
       const needsMore = Object.values(list.entries).filter(record => record.status === 'open').length < 15
       const localFallbacks = promoted.map(slug).filter(id => catalog.get(id)?.pool === 'discovery' && list.entries[id]?.suggested)

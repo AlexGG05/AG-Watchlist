@@ -45,6 +45,11 @@ function card(entry, repeat = false) {
   const article = make('article', 'card')
   const index = stillTitles.indexOf(entry.title)
   const art = make('div', index >= 0 ? `art still a${index}` : 'art')
+  const artwork = button('', () => descriptionDialog(entry), 'art-link')
+  artwork.setAttribute('aria-label', `Beschreibung zu ${entry.title}`)
+  if (entry.poster) artwork.append(posterImage(entry, 'card-poster'))
+  else if (state.data.user && state.data.onlineSearch) watchArtwork(artwork, entry)
+  art.append(artwork)
   const menu = button('⋯', () => titleDialog(entry, repeat), 'icon-button')
   menu.setAttribute('aria-label', `Optionen für ${entry.title}`)
   art.append(make('span', entry.pool === 'marvel' ? 'pill marvel' : 'pill',
@@ -59,6 +64,10 @@ function card(entry, repeat = false) {
   if (entry.reason) details.append(make('p', 'reason', entry.reason))
   if (entry.status === 'excluded') details.append(badge('Nicht ansehbar'))
   else if (entry.rating) details.append(badge(entry.rating))
+  if (entry.seasons?.length && Array.isArray(entry.watchedSeasons)) {
+    const count = entry.seasons.filter(season => entry.watchedSeasons.includes(season.number)).length
+    details.append(make('p', 'meta', `${count} von ${entry.seasons.length} Staffeln gesehen`))
+  }
   if (repeat) details.append(make('span', 'rating series', '❤️ Erneut ansehen'))
   if (entry.pool === 'marvel' && entry.status === 'watching') details.append(make('span', 'pill', 'Am schauen'))
   if (!['seen','excluded'].includes(entry.status)) {
@@ -197,6 +206,7 @@ function titleDialog(entry, repeat) {
   } else if (entry.status === 'excluded') {
     fields.push(badge('Nicht ansehbar'))
   } else {
+    if (entry.type === 'serie' && entry.tmdb) actions.push(button('Staffeln bearbeiten', () => descriptionDialog(entry)))
     const options = state.data.ratings.filter(rating => (rating !== 'Lieblingsserie' || entry.type === 'serie') &&
       (rating !== 'Lieblingsfilm' || entry.type === 'film'))
     const rating = field('Bewertung', 'rating', { values: [['', 'Ohne neue Bewertung'], ...options.map(value => [value, value])] })
@@ -214,6 +224,233 @@ function titleDialog(entry, repeat) {
   }
   dialog(entry.title, fields, actions)
 }
+function posterImage(entry, className) {
+  const image = make('img', className)
+  image.src = `https://image.tmdb.org/t/p/w342${entry.poster}`
+  image.alt = ''
+  image.loading = 'lazy'
+  return image
+}
+function seasonFields(entry, checked) {
+  const group = make('fieldset', 'season-list')
+  group.append(make('legend', '', `${entry.seasons.length} veröffentlichte ${entry.seasons.length === 1 ? 'Staffel' : 'Staffeln'}`))
+  for (const season of entry.seasons) {
+    const label = make('label', 'checkbox')
+    const checkbox = make('input')
+    Object.assign(checkbox, { type: 'checkbox', value: season.number, checked: checked.has(season.number) })
+    checkbox.addEventListener('change', () => {
+      if (checkbox.checked) checked.add(season.number)
+      else checked.delete(season.number)
+    })
+    label.append(checkbox, season.name)
+    group.append(label)
+  }
+  return group
+}
+function descriptionPanel(entry) {
+  const detail = make('div', 'media-detail')
+  if (entry.poster) detail.append(posterImage(entry, 'detail-poster'))
+  const copy = make('div')
+  copy.append(make('p', 'meta', [entry.type === 'serie' ? 'Serie' : 'Film', entry.year, entry.extent].filter(Boolean).join(' · ')))
+  copy.append(make('p', '', entry.description || 'Keine Inhaltsbeschreibung verfügbar.'))
+  if (!entry.description && entry.reason) copy.append(make('p', 'meta', entry.reason))
+  detail.append(copy)
+  return detail
+}
+const mediaMatches = new Map()
+async function resolveMedia(entry) {
+  if (entry.tmdb && entry.poster) return entry
+  if (!mediaMatches.has(entry.id)) {
+    const request = entry.tmdb ? api(`media/details?id=${encodeURIComponent(entry.tmdb)}`) :
+      api(`media/search?q=${encodeURIComponent(entry.title)}`).then(data => {
+        const normalize = title => title.normalize('NFKC').replace(/[^\p{L}\p{N}]/gu, '').toLowerCase()
+        return data.results.find(candidate => candidate.type === entry.type &&
+          [candidate.title, candidate.original].some(title => title && normalize(title) === normalize(entry.title)))
+      })
+    const lookup = request.catch(error => {
+      mediaMatches.delete(entry.id)
+      throw error
+    })
+    mediaMatches.set(entry.id, lookup)
+  }
+  return mediaMatches.get(entry.id)
+}
+const observedArt = new WeakMap()
+const artworkObserver = typeof IntersectionObserver === 'undefined' ? null : new IntersectionObserver(changes => {
+  for (const change of changes) {
+    if (!change.isIntersecting) continue
+    const artwork = change.target
+    artworkObserver.unobserve(artwork)
+    if (!artwork.isConnected) continue
+    resolveMedia(observedArt.get(artwork)).then(media => {
+      if (media?.poster && artwork.isConnected) artwork.append(posterImage(media, 'card-poster'))
+    }).catch(() => {})
+  }
+})
+function watchArtwork(artwork, entry) {
+  observedArt.set(artwork, entry)
+  artworkObserver?.observe(artwork)
+}
+async function descriptionDialog(entry) {
+  const panel = descriptionPanel(entry)
+  dialog(entry.title, [panel], [])
+  if (!state.data.user || !state.data.onlineSearch) return
+  const status = make('p', 'meta', 'Titeldaten werden geladen …')
+  panel.after(status)
+  try {
+    const match = await resolveMedia(entry)
+    if (!match) { status.remove(); return }
+    const { tmdb } = match
+    const details = await api(`media/details?id=${encodeURIComponent(tmdb)}`)
+    if (!panel.isConnected || !$('modal').open) return
+    const fields = [descriptionPanel({ ...entry, ...details })]
+    const actions = []
+    if (details.type === 'serie' && details.seasons.length && details.status !== 'excluded') {
+      const selected = new Set(details.watchedSeasons)
+      fields.push(seasonFields(details, selected))
+      actions.push(submit('Staffelstand speichern', () => update({
+        action: 'log-selection', items: [{ tmdb, watched: [...selected] }],
+      })))
+    }
+    dialog(entry.title, fields, actions)
+  } catch (error) {
+    status.textContent = error.message
+  }
+}
+function logSearch() {
+  if (!state.data?.user) return auth()
+  if (!state.data.onlineSearch) return addTitle(true)
+  const queryField = field('Film, Serie oder Reihe suchen', 'media-query', { type: 'search', placeholder: 'z. B. Star Wars', minLength: 2, maxLength: 120 })
+  const query = queryField.querySelector('input')
+  const results = make('div', 'lookup-results')
+  const searchStatus = make('p', 'meta')
+  searchStatus.setAttribute('role', 'status')
+  const selected = new Map()
+  const seenResults = new Set()
+  let generation = 0
+  let page = 1
+  let timer
+
+  function resultCard(entry) {
+    const row = make('article', 'lookup-card')
+    const artwork = button(entry.poster ? '' : 'Info', () => {
+      const expanded = !details.hidden
+      details.hidden = expanded
+      artwork.setAttribute('aria-expanded', String(!expanded))
+      if (!expanded && entry.type === 'serie') loadSeasons()
+    }, 'lookup-art')
+    artwork.setAttribute('aria-label', `Beschreibung zu ${entry.title}`)
+    artwork.setAttribute('aria-expanded', 'false')
+    if (entry.poster) artwork.append(posterImage(entry, 'lookup-poster'))
+    const copy = make('div', 'lookup-copy')
+    copy.append(make('strong', '', entry.title), make('p', 'meta', [entry.type === 'serie' ? 'Serie' : 'Film', entry.year].filter(Boolean).join(' · ')))
+    const details = make('div', 'lookup-detail')
+    details.hidden = true
+    details.append(make('p', '', entry.description || 'Keine Inhaltsbeschreibung verfügbar.'))
+    let loaded = false
+    async function loadSeasons() {
+      if (loaded || entry.status === 'excluded') return
+      loaded = true
+      const message = make('p', 'meta', 'Staffeln werden geladen …')
+      details.append(message)
+      try {
+        const info = await api(`media/details?id=${encodeURIComponent(entry.tmdb)}`)
+        message.remove()
+        if (!info.seasons.length) {
+          details.append(make('p', 'meta', 'Keine veröffentlichten Staffeln gefunden.'))
+          return
+        }
+        const existing = selected.get(entry.tmdb)
+        const checked = existing || new Set(info.watchedSeasons)
+        const fields = seasonFields(info, checked)
+        fields.addEventListener('change', () => selected.set(entry.tmdb, checked))
+        details.append(fields)
+      } catch (error) {
+        loaded = false
+        message.textContent = error.message
+        details.append(button('Erneut laden', event => {
+          message.remove()
+          event.currentTarget.remove()
+          loadSeasons()
+        }))
+      }
+    }
+
+    if (entry.status === 'excluded') copy.append(badge('Nicht ansehbar'))
+    else if (entry.type === 'film') {
+      const label = make('label', 'checkbox')
+      const checkbox = make('input')
+      Object.assign(checkbox, { type: 'checkbox', checked: entry.status === 'seen' || selected.has(entry.tmdb), disabled: entry.status === 'seen' })
+      checkbox.addEventListener('change', () => {
+        if (checkbox.checked) selected.set(entry.tmdb, new Set())
+        else selected.delete(entry.tmdb)
+      })
+      label.append(checkbox, entry.status === 'seen' ? 'Bereits gesehen' : 'Gesehen')
+      copy.append(label)
+    } else {
+      copy.append(button('Staffeln auswählen', () => {
+        details.hidden = false
+        artwork.setAttribute('aria-expanded', 'true')
+        loadSeasons()
+      }, 'button compact'))
+    }
+    row.append(artwork, copy, details)
+    return row
+  }
+
+  async function search(append = false) {
+    const current = ++generation
+    const value = query.value.trim()
+    if (!append) { page = 1; seenResults.clear(); results.replaceChildren() }
+    if (value.length < 2) { searchStatus.textContent = ''; return }
+    searchStatus.textContent = 'Suche läuft …'
+    try {
+      const data = await api(`media/search?q=${encodeURIComponent(value)}&page=${page}`)
+      if (current !== generation || !results.isConnected) return
+      results.querySelector('.lookup-more')?.remove()
+      for (const entry of data.results) {
+        if (seenResults.has(entry.tmdb)) continue
+        seenResults.add(entry.tmdb)
+        results.append(resultCard(entry))
+      }
+      if (data.more) results.append(button('Weitere Ergebnisse', event => {
+        event.currentTarget.disabled = true
+        page++
+        search(true)
+      }, 'button lookup-more'))
+      searchStatus.textContent = results.childElementCount ? '' : 'Keine passenden Filme oder Serien gefunden.'
+    } catch (error) {
+      if (current === generation) {
+        if (append) {
+          page--
+          const more = results.querySelector('.lookup-more')
+          if (more) more.disabled = false
+        }
+        searchStatus.textContent = error.message
+      }
+    }
+  }
+  query.addEventListener('input', () => {
+    generation++
+    clearTimeout(timer)
+    timer = setTimeout(search, 300)
+  })
+  query.addEventListener('keydown', event => {
+    if (event.key !== 'Enter') return
+    event.preventDefault()
+    clearTimeout(timer)
+    search()
+  })
+  dialog('Gesehen eintragen', [queryField, searchStatus, results], [
+    submit('Auswahl speichern', async () => {
+      if (!selected.size) throw new Error('Wähle einen Film oder mindestens eine Staffel aus.')
+      await update({ action: 'log-selection', items: [...selected].map(([tmdb, watched]) => ({ tmdb, watched: [...watched] })) })
+    }),
+    button('Titel manuell eintragen', () => addTitle(true)),
+  ])
+  query.focus()
+}
+
 function addTitle(log = false) {
   if (!state.data?.user) return auth()
   const fields = [
@@ -272,7 +509,7 @@ function setTab(tab) {
 }
 $('account').addEventListener('click', account)
 $('hero-action').addEventListener('click', () => addTitle())
-$('log-title').addEventListener('click', () => addTitle(true))
+$('log-title').addEventListener('click', logSearch)
 $('preferences').addEventListener('click', preferences)
 $('close').addEventListener('click', () => { if (!busy) $('modal').close() })
 $('modal').addEventListener('cancel', event => { if (busy) event.preventDefault() })

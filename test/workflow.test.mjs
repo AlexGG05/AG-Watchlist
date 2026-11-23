@@ -21,6 +21,26 @@ test('separate verified accounts retain their watchlists and recommendation rule
       if (url.hostname !== 'api.themoviedb.org' || url.searchParams.get('api_key') !== 'local-fixture') {
         throw new Error('Unexpected request')
       }
+      if (url.pathname === '/3/search/multi' && url.searchParams.get('query') === 'Star Wars') return Response.json({
+        results: [
+          { id: 51, media_type: 'movie', title: 'Star Wars: Testfilm', overview: 'Eine Filmhandlung.', poster_path: '/movie.jpg' },
+          { id: 52, media_type: 'tv', name: 'Star Wars: Testserie' },
+          { id: 53, media_type: 'person', name: 'Auszuschließender Treffer' },
+        ],
+        total_pages: 2,
+      })
+      if (url.pathname === '/3/movie/51') return Response.json({
+        id: 51, title: 'Star Wars: Testfilm', overview: 'Eine Filmhandlung.', poster_path: '/movie.jpg',
+      })
+      if (url.pathname === '/3/tv/52') return Response.json({
+        id: 52, name: 'Star Wars: Testserie', overview: 'Eine Serienhandlung.', poster_path: '/series.jpg',
+        seasons: [
+          { season_number: 0, air_date: '2020-01-01' },
+          { season_number: 1, air_date: '2021-01-01' },
+          { season_number: 2, air_date: '2022-01-01' },
+          { season_number: 3, air_date: '2999-01-01' },
+        ],
+      })
       if (url.pathname === '/3/discover/movie') return Response.json({ results: [
         { id: 42, title: 'Ein neues TMDB-Rätsel', genre_ids: [9648], release_date: '2020-01-01' },
       ] })
@@ -110,4 +130,32 @@ test('separate verified accounts retain their watchlists and recommendation rule
   assert.equal(discovery.status, 'open')
   assert.equal(discovery.verifiedProvider, 'Netflix')
   assert.equal((await read(first)).titles.some(title => title.id === 'ein-eigener-film'), false)
+
+  const media = (path, cookie) => fetch(`${origin}/api/media/${path}`, { headers: { Cookie: cookie } })
+  assert.equal((await media('search?q=Star+Wars', '')).status, 401)
+  const search = await (await media('search?q=starw+ars', second)).json()
+  assert.deepEqual(search.results.map(result => result.tmdb), ['movie:51', 'tv:52'])
+  assert.equal(search.more, true)
+  const series = async () => (await media('details?id=tv%3A52', second)).json()
+  assert.deepEqual((await series()).seasons.map(season => season.number), [1, 2])
+
+  const logSelection = items => post('list', { action: 'log-selection', items }, second)
+  const bulk = await logSelection([{ tmdb: 'movie:51', watched: [] }, { tmdb: 'tv:52', watched: [2] }])
+  assert.equal(bulk.status, 200)
+  const recorded = (await bulk.json()).titles
+  const film = recorded.find(title => title.tmdb === 'movie:51')
+  assert.equal(film.poster, '/movie.jpg')
+  assert.equal(film.description, 'Eine Filmhandlung.')
+  assert.equal(film.status, 'seen')
+  assert.equal(recorded.find(title => title.tmdb === 'tv:52').status, 'watching')
+  assert.deepEqual((await series()).watchedSeasons, [2])
+  assert.equal((await logSelection([{ tmdb: 'tv:52', watched: [1, 2, 3] }])).status, 400)
+  assert.deepEqual((await series()).watchedSeasons, [2])
+  const complete = await logSelection([{ tmdb: 'tv:52', watched: [2, 1] }])
+  assert.equal(complete.status, 200)
+  const finished = (await complete.json()).titles.find(title => title.tmdb === 'tv:52')
+  assert.equal(finished.status, 'seen')
+  assert.equal((await post('list', { action: 'seen', id: finished.id, rating: 'Lieblingsserie' }, second)).status, 200)
+  assert.deepEqual((await series()).watchedSeasons, [1, 2])
+  assert.equal((await read(first)).titles.some(title => title.tmdb === 'movie:51'), false)
 })
