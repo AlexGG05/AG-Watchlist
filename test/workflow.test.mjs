@@ -13,6 +13,7 @@ test('separate verified accounts retain their watchlists and recommendation rule
   const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8')
   const universeConfig = app.slice(app.indexOf('const universeGroups'), app.indexOf('const state'))
   const featured = [...universeConfig.matchAll(/\{ name: '([^']+)'(?:, curated: '([^']+)')?/g)]
+  assert.equal([...universeConfig.matchAll(/motif: '[^']+'/g)].length, featured.length)
   assert.ok(featured.length > 90)
   for (const [, name, curated] of featured) assert.ok(universeCatalog.get(curated || name)?.length, name)
   const dir = await mkdtemp(join(tmpdir(), 'ag-watchlist-'))
@@ -34,6 +35,10 @@ test('separate verified accounts retain their watchlists and recommendation rule
       }
       if (url.hostname !== 'api.themoviedb.org' || url.searchParams.get('api_key') !== 'local-fixture') {
         throw new Error('Unexpected request')
+      }
+      if (url.pathname === '/3/movie/22') return Response.json({ backdrop_path: '/pirate-backdrop.jpg' })
+      if (url.pathname === '/3/search/tv' && url.searchParams.get('query') === 'Willkommen in Gravity Falls') {
+        return Response.json({ results: [{ name: 'Willkommen in Gravity Falls', poster_path: '/gravity-poster.jpg' }] })
       }
       if (url.pathname === '/3/collection/10') return Response.json({ parts: [
         { id: 51, title: 'Star Wars: Testfilm', release_date: '2020-01-01' },
@@ -354,6 +359,10 @@ test('separate verified accounts retain their watchlists and recommendation rule
   assert.equal((await (await media('search?q=Star+Wars', first)).json()).results.find(result => result.tmdb === 'movie:51').status, 'reserve')
   assert.equal((await (await media('search?q=Star+Wars', second)).json()).results.find(result => result.tmdb === 'movie:51').status, 'seen')
   assert.equal((await (await media('search?q=Riverdale', first)).json()).results[0].status, 'excluded')
+  const artwork = (name, cookie) => fetch(`${origin}/api/universe/art?name=${encodeURIComponent(name)}`, { headers: { Cookie: cookie } })
+  assert.equal((await artwork('Fluch der Karibik', '')).status, 401)
+  assert.deepEqual(await (await artwork('Fluch der Karibik', first)).json(), { image: '/pirate-backdrop.jpg', type: 'backdrop' })
+  assert.deepEqual(await (await artwork('Gravity Falls', second)).json(), { image: '/gravity-poster.jpg', type: 'poster' })
   const throttled = await media('search?q=TMDB+limit', third)
   assert.equal(throttled.status, 429)
   assert.match((await throttled.json()).error, /TMDB.*Anfragelimit/)

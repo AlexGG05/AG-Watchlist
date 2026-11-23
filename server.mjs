@@ -832,6 +832,38 @@ createServer(async (req, res) => {
       if (!user) throw fail(401, 'Bitte melde dich an.')
       return json(res, householdView(user))
     }
+    if (req.method === 'GET' && path === '/api/universe/art') {
+      const user = getUser(req)
+      if (!user) throw fail(401, 'Bitte melde dich an.')
+      const name = url.searchParams.get('name')
+      const ids = universeCatalog.get(name)
+      if (!ids) throw fail(404, 'Universum nicht gefunden.')
+      if (!onlineSearch) return json(res, { image: '' })
+      throttle(`universe-art:${user.id}`, 140)
+      try {
+        const entries = ids.map(id => catalog.get(id))
+        const representative = name === 'star-wars' ? entries.find(entry => entry.tmdb === 'movie:11') : entries.find(entry => entry.tmdb)
+        const language = { language: 'de-DE' }
+        let media
+        if (representative) {
+          const [type, id] = representative.tmdb.split(':')
+          media = await cachedTmdb(`${type}/${id}`, language, day)
+        } else {
+          const entry = entries[0]
+          const type = entry.type === 'film' ? 'movie' : 'tv'
+          const payload = await cachedTmdb(`search/${type}`, { ...language, query: entry.title, include_adult: 'false' }, day)
+          const title = normalizedTitle(entry.title)
+          media = payload.results.find(candidate => [candidate.title, candidate.original_title, candidate.name, candidate.original_name]
+            .filter(Boolean).some(value => normalizedTitle(value) === title))
+        }
+        const imagePath = path => typeof path === 'string' && /^\/[\w.-]+$/.test(path) ? path : ''
+        const backdrop = imagePath(media?.backdrop_path)
+        return json(res, { image: backdrop || imagePath(media?.poster_path), type: backdrop ? 'backdrop' : 'poster' })
+      } catch (error) {
+        if (error.status) throw error
+        throw fail(502, 'Für dieses Universum ist gerade kein Bild verfügbar.')
+      }
+    }
     if (req.method === 'GET' && path === '/api/universe') {
       const user = getUser(req)
       if (!user) throw fail(401, 'Bitte melde dich an.')
