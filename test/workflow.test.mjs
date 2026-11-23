@@ -128,6 +128,21 @@ test('separate verified accounts retain their watchlists and recommendation rule
     assert.ok(digest.startsWith(path[2]), `Versioned URL must match ${name} contents`)
   }
 
+  assert.match(html, /rel="apple-touch-icon"/)
+  const manifestResponse = await fetch(origin + '/manifest.webmanifest')
+  assert.match(manifestResponse.headers.get('content-type'), /application\/manifest\+json/)
+  const manifest = await manifestResponse.json()
+  assert.equal(manifest.display, 'standalone')
+  assert.equal(manifest.start_url, '/')
+  for (const icon of manifest.icons) {
+    const png = Buffer.from(await (await fetch(origin + icon.src)).arrayBuffer())
+    const [width, height] = icon.sizes.split('x').map(Number)
+    assert.equal(png.readUInt32BE(16), width)
+    assert.equal(png.readUInt32BE(20), height)
+  }
+  assert.equal((await fetch(origin + '/sw.js')).status, 200)
+  assert.equal((await fetch(origin + '/offline.html')).status, 200)
+
   const firstMarvel = 'the-first-avenger-captain-america'
   assert.equal((await fetch(`${origin}/api/list`)).status, 401)
   assert.equal((await fetch(`${origin}/api/household`)).status, 401)

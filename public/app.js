@@ -115,6 +115,39 @@ const universeGroups = [
 ]
 const state = { tab: 'open', type: 'all', universe: null, data: null }
 
+const standaloneMode = window.matchMedia?.('(display-mode: standalone)')
+let installPrompt
+function canShowInstall() {
+  return window.isSecureContext && !standaloneMode?.matches && !navigator.standalone
+}
+function showInstallButton() {
+  $('install-access').hidden = !canShowInstall()
+}
+window.addEventListener('beforeinstallprompt', event => {
+  event.preventDefault()
+  installPrompt = event
+  showInstallButton()
+})
+window.addEventListener('appinstalled', () => {
+  installPrompt = null
+  showInstallButton()
+  if ($('install-dialog').open) $('install-dialog').close()
+})
+standaloneMode?.addEventListener('change', showInstallButton)
+async function installApp() {
+  if ($('modal').open) $('modal').close()
+  if (installPrompt) {
+    const prompt = installPrompt
+    installPrompt = null
+    try {
+      await prompt.prompt()
+      return
+    } catch {
+      // Browser installation can fall back to the platform menu.
+    }
+  }
+  $('install-dialog').showModal()
+}
 let toastTimer
 function make(tag, className, content) {
   const element = document.createElement(tag)
@@ -210,6 +243,16 @@ function render() {
     if (nav.dataset.tab === state.tab) nav.setAttribute('aria-current', 'page')
     else nav.removeAttribute('aria-current')
   }
+  let mobileActive = false
+  for (const nav of document.querySelectorAll('[data-mobile-tab]')) {
+    const current = nav.dataset.mobileTab === state.tab
+    if (current) {
+      nav.setAttribute('aria-current', 'page')
+      mobileActive = true
+    } else nav.removeAttribute('aria-current')
+  }
+  if (mobileActive) $('mobile-more').removeAttribute('aria-current')
+  else $('mobile-more').setAttribute('aria-current', 'page')
   if (shared) return
   if (universes) return renderUniverse()
   for (const type of document.querySelectorAll('[data-type]')) {
@@ -297,7 +340,7 @@ function auth(mode = 'login', importProfile = false) {
 }
 function account() {
   if (!state.data?.user) return auth()
-  dialog('Mein Konto', [make('p', '', state.data.user.email)], [submit('Abmelden', async () => {
+  const actions = [submit('Abmelden', async () => {
     await api('logout', {})
     state.data = null
     mediaMatches.clear()
@@ -308,7 +351,9 @@ function account() {
     state.universe = null
     $('modal').close()
     auth()
-  })])
+  })]
+  if (canShowInstall()) actions.unshift(button('Als App installieren', installApp))
+  dialog('Mein Konto', [make('p', '', state.data.user.email)], actions)
 }
 async function update(input) {
   state.data = await api('list', input)
@@ -863,13 +908,27 @@ async function loadHousehold() {
     if (state.tab === 'household' && state.data?.user.email === user) page.replaceChildren(make('p', 'meta', error.message))
   }
 }
-function setTab(tab) {
+function mobileMore() {
+  const actions = [
+    ['Gesehenes Archiv', 'seen'], ['Dauerhaft ausgeschlossen', 'excluded'], ['Haushalt', 'household'],
+  ]
+  if (!$('extras-tab').hidden) actions.push(['Extras', 'extras'])
+  const controls = actions.map(([label, tab]) => button(label, () => {
+    $('modal').close()
+    setTab(tab, true)
+  }))
+  controls.push(button('Genre-Interessen', preferences), button('Mein Konto', account))
+  if (canShowInstall()) controls.push(button('Als App installieren', installApp))
+  dialog('Weitere Bereiche', [], controls)
+}
+function setTab(tab, scroll = false) {
   state.tab = tab
   state.type = 'all'
   $('genre').value = ''
   $('search').value = ''
   render()
   if (tab === 'household') loadHousehold()
+  if (scroll) window.scrollTo(0, 0)
 }
 $('refresh-recommendations').addEventListener('click', async event => {
   const control = event.currentTarget
@@ -914,6 +973,20 @@ for (const type of document.querySelectorAll('[data-type]')) type.addEventListen
 })
 $('genre').addEventListener('change', render)
 $('search').addEventListener('input', render)
+$('mobile-more').addEventListener('click', mobileMore)
+$('mobile-more').setAttribute('aria-haspopup', 'dialog')
+for (const destination of document.querySelectorAll('[data-mobile-tab]')) {
+  destination.addEventListener('click', () => {
+    const tab = destination.dataset.mobileTab
+    if (tab === 'universes') state.universe = null
+    setTab(tab, true)
+  })
+}
+$('install-access').addEventListener('click', installApp)
+showInstallButton()
+if (window.isSecureContext && 'serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/sw.js').catch(error => console.warn('Service Worker:', error.message))
+}
 const verified = new URLSearchParams(location.search).get('verified')
 if (verified !== null) {
   const url = new URL(location.href)

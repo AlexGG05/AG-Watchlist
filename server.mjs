@@ -76,6 +76,13 @@ const staticFiles = new Map([
   ['/app.js',['app.js','text/javascript; charset=utf-8']],
   ['/style.css',['style.css','text/css; charset=utf-8']], ['/stills.webp',['stills.webp','image/webp']],
   ['/hero.webp',['hero.webp','image/webp']],
+  ['/manifest.webmanifest',['manifest.webmanifest','application/manifest+json; charset=utf-8']],
+  ['/sw.js',['sw.js','text/javascript; charset=utf-8']],
+  ['/offline.html',['offline.html','text/html; charset=utf-8']],
+  ['/offline.css',['offline.css','text/css; charset=utf-8']],
+  ['/icons/app-192.png',['icons/app-192.png','image/png']],
+  ['/icons/app-512.png',['icons/app-512.png','image/png']],
+  ['/icons/apple-touch.png',['icons/apple-touch.png','image/png']],
 ])
 const versionedAssets = new Map()
 let index = readFileSync(new URL('./public/index.html', import.meta.url), 'utf8')

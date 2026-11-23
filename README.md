@@ -38,6 +38,10 @@ Ab zwei Mitgliedern zeigt **Gemeinsam schauen** Vorschläge aus den persönliche
 
 Die Titelansicht unterscheidet deutsche Abo-, Zusatzabo-, Leih- und Kaufangebote. TMDB/JustWatch liefert Anbieter und Angebotsart. Für Europreise kann optional ein Schlüssel für die Streaming Availability API über die Arcane-Variable `STREAMING_AVAILABILITY_API_KEY` gesetzt werden. Ohne übermittelten Betrag wird ein ggf. verfügbarer Angebotslink angezeigt.
 
+## Als App installieren
+
+AG Watchlist ist über die öffentliche HTTPS-Adresse als Web-App installierbar. Auf Android in Chrome im Browsermenü **App installieren** beziehungsweise **Zum Startbildschirm hinzufügen** wählen. Auf iPhone und iPad in Safari über **Teilen → Zum Home-Bildschirm** installieren. Die App nutzt dasselbe Konto wie die Website und braucht zum Laden persönlicher Listen eine Internetverbindung.
+
 ## Lokal starten
 
 Node.js 24 verwenden.
